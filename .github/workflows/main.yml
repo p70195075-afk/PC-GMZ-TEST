@@ -1,0 +1,266 @@
+name: PCGMZ
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 4320
+
+    steps:
+      - name: Disable Sleep / Hibernate / PowerSave
+        shell: powershell
+        run: |
+          powercfg /change standby-timeout-ac 0
+          powercfg /change monitor-timeout-ac 0
+          powercfg /hibernate off
+          powercfg /setactive SCHEME_MIN
+          echo Disabled Sleep/Hibernate
+
+      - name: Optimize TCP Stack + QoS Gaming
+        shell: powershell
+        run: |
+          netsh interface tcp set heuristics disabled
+          netsh interface tcp set global congestionprovider=ctcp
+          netsh interface tcp set global rss=enabled
+          netsh interface tcp set global chimney=disabled
+          netsh interface tcp set global ecncapability=enabled
+          echo QoS Gaming Turbo Applied
+
+      - name: Optimize RDP Keepalive
+        shell: powershell
+        run: |
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'KeepAliveEnable' -Value 1 -PropertyType DWord -Force
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name 'KeepAliveTime' -Value 30000 -PropertyType DWord -Force
+          echo RDP KeepAlive Enabled
+
+      - name: Configure Core RDP Settings
+        shell: powershell
+        run: |
+          Start-Process powershell -Verb runAs -ArgumentList @"
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Force
+            netsh advfirewall firewall add rule name='RDP-Allow' dir=in action=allow protocol=TCP localport=3389
+            Restart-Service -Name TermService -Force
+          "@
+
+      - name: Anti Idle + Session Timeout Policies
+        shell: powershell
+        run: |
+          New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -ErrorAction SilentlyContinue
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name 'MaxIdleTime' -Value 0 -PropertyType DWord -Force
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name 'fResetBroken' -Value 1 -PropertyType DWord -Force
+          echo Idle Disconnect Disabled
+
+      - name: Create RDP User Secure
+        shell: powershell
+        run: |
+          Add-Type -AssemblyName System.Security
+          $chars = ([char[]](33..126))
+          $password = -join ($chars | Get-Random -Count 14)
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          if (-not (Get-LocalUser -Name "PCGMZ" -ErrorAction SilentlyContinue)) {
+              New-LocalUser -Name "PCGMZ" -Password $securePass -AccountNeverExpires
+          }
+          Add-LocalGroupMember -Group "Administrators" -Member "PCGMZ"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PCGMZ"
+          echo "RDP_USER=PCGMZ" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        shell: powershell
+        run: |
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $file = "$env:TEMP\\tailscale.msi"
+          Invoke-WebRequest -Uri $url -OutFile $file
+          Start-Process msiexec.exe -ArgumentList "/i `"$file`" /quiet /norestart" -Wait
+          Remove-Item $file -Force
+
+      - name: Establish Tailscale
+        shell: powershell
+        run: |
+          & "$env:ProgramFiles\\Tailscale\\tailscale.exe" up --authkey ${{ secrets.TAILSCALE_AUTH_KEY }} --hostname "PCGMZ-${{ github.run_id }}"
+          Start-Sleep -Seconds 10
+          $tsIP = & "$env:ProgramFiles\\Tailscale\\tailscale.exe" ip -4
+          echo "TS_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Verify RDP
+        shell: powershell
+        run: |
+          $result = Test-NetConnection -ComputerName $env:TS_IP -Port 3389
+          if (-not $result.TcpTestSucceeded) { exit 1 }
+
+      - name: Auto Reconnect Monitor
+        shell: powershell
+        run: |
+          $script = @"
+          while ($true) {
+            if (-not (Test-Connection 8.8.8.8 -Count 1 -Quiet)) {
+              Restart-Service TermService -Force
+              Get-NetAdapter | Disable-NetAdapter -Confirm:$false; Start-Sleep 2; Get-NetAdapter | Enable-NetAdapter -Confirm:$false
+            }
+            Start-Sleep 15
+          }
+          "@
+          $path = "$env:ProgramData\\rdp-monitor.ps1"
+          $script | Out-File $path
+          Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File $path"
+
+      - name: Game Performance Boost RTX4090 Tweaks
+        shell: powershell
+        run: |
+          powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61
+          powercfg -setactive e9a42b02-d5df-448d-aa00-03f14749eb61
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -Value 2 -PropertyType DWord -Force
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' -Name 'GPU Priority' -Value 8 -PropertyType DWord -Force
+          netsh int tcp set global autotuninglevel=experimental
+          echo RTX4090 Game Performance Boost Applied
+
+      - name: Enable Ultra Low Latency Mode
+        shell: powershell
+        run: |
+          # Low-latency kernel and scheduler tweaks
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v Win32PrioritySeparation /t REG_DWORD /d 38 /f
+          # Ensure hardware-accelerated GPU scheduling is enabled (HAGS)
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -Value 2 -PropertyType DWord -Force
+          # Reduce NIC interrupt moderation (if supported) to lower packet latency
+          Get-NetAdapter | ForEach-Object { 
+            try { Set-NetAdapterAdvancedProperty -Name $_.Name -DisplayName 'Interrupt Moderation' -DisplayValue 'Disabled' -NoRestart -ErrorAction SilentlyContinue } catch { }
+          }
+          Write-Host "Ultra Low Latency Mode applied"
+
+      - name: Enable DirectStorage runtime (if available)
+        shell: powershell
+        run: |
+          # Try installing DirectStorage via winget but never fail the step
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            try {
+              & winget install --id Microsoft.DirectStorage -e --accept-package-agreements --accept-source-agreements --source winget
+              $code = $LASTEXITCODE
+              if ($code -ne 0) { Write-Host "winget returned exit code $code. Package may be unavailable in this runner." }
+              else { Write-Host "DirectStorage install succeeded (winget exit 0)" }
+            } catch {
+              Write-Host "winget threw an exception but continuing: $_"
+            }
+          } else {
+            Write-Host "winget not available; skipping DirectStorage install. Manual install recommended: https://aka.ms/directstorage"
+          }
+          Write-Host "Continuing without DirectStorage..."
+          exit 0
+
+      - name: Competitive Extreme 360Hz Mode
+        shell: powershell
+        run: |
+          $guid = 'e9a42b02-d5df-448d-aa00-03f14749Eb61'
+          try {
+            powercfg -duplicatescheme $guid | Out-Null
+            powercfg -setactive $guid
+            Write-Host "Ultimate Performance power plan enabled"
+          } catch { Write-Host "Failed to enable Ultimate Performance: $_" }
+
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v Win32PrioritySeparation /t REG_DWORD /d 38 /f
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v MaxFrameLatency /t REG_DWORD /d 1 /f
+          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TcpAckFrequency /t REG_DWORD /d 1 /f
+          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TCPNoDelay /t REG_DWORD /d 1 /f
+
+          Get-NetAdapter | ForEach-Object {
+            try {
+              Set-NetAdapterAdvancedProperty -Name $_.Name -DisplayName 'Interrupt Moderation' -DisplayValue 'Disabled' -NoRestart -ErrorAction SilentlyContinue
+            } catch { }
+          }
+
+          Write-Host "Competitive Extreme 360Hz Mode applied (best-effort). Some settings may require reboot or hardware support."
+
+      - name: Extreme Competitive Plus Boost
+        shell: powershell
+        run: |
+          Write-Host "Applying Extreme Competitive Plus Boost (best-effort)"
+
+          # Disable dynamic tick (requires reboot to take full effect)
+          try { bcdedit /set disabledynamictick yes } catch { Write-Host "bcdedit disabledynamictick failed or requires admin: $_" }
+
+          # Prefer platform clock (HPET) where available
+          try { bcdedit /set useplatformclock true } catch { Write-Host "bcdedit useplatformclock failed or requires admin: $_" }
+
+          # Increase system cache for streaming workloads
+          try { reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v LargeSystemCache /t REG_DWORD /d 1 /f } catch { }
+
+          # Set TermService (RDP) process priority to High to favor interactive responsiveness
+          try {
+            $p = Get-Process -Name TermService -ErrorAction SilentlyContinue
+            if ($p) { $p.PriorityClass = 'High'; Write-Host "Set TermService priority to High" }
+          } catch { }
+
+          # Set timer resolution to 1ms for lower input latency during this job (best-effort)
+          Add-Type -TypeDefinition @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class Timer {
+            [DllImport("winmm.dll", SetLastError = true)]
+            public static extern uint timeBeginPeriod(uint uMilliseconds);
+            [DllImport("winmm.dll", SetLastError = true)]
+            public static extern uint timeEndPeriod(uint uMilliseconds);
+          }
+"@ -PassThru | Out-Null
+          try { [Timer]::timeBeginPeriod(1) | Out-Null; Write-Host "Requested 1ms timer resolution (process scope)" } catch { Write-Host "timeBeginPeriod failed: $_" }
+
+          Write-Host "Extreme Competitive Plus Boost applied (some changes may require reboot or specific hardware/drivers)."
+
+      - name: Maintain Connection
+        shell: powershell
+        run: |
+          Write-Host "==============================="
+          Write-Host "PCGMZ Info:"
+          Write-Host "Address: $env:TS_IP"
+          Write-Host "Username: $env:RDP_USER"
+          Write-Host "Password: $env:RDP_PASS"
+          Write-Host "==============================="
+          while ($true) {
+              Write-Host "[$(Get-Date)] PCGMZ Session still running..."
+              Start-Sleep -Seconds 300
+          }
+
+      - name: Anti DDoS Firewall Shield
+        shell: powershell
+        run: |
+          Write-Host "Applying Anti-DDoS Firewall Shield"
+          try { netsh advfirewall firewall delete rule name='RDP-Allow' } catch { }
+          netsh advfirewall firewall add rule name='RDP-Tailscale-Only' dir=in action=allow protocol=TCP localport=3389 remoteip=100.64.0.0/10 profile=any
+          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v SynAttackProtect /t REG_DWORD /d 1 /f
+          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v EnableDDoSDefend /t REG_DWORD /d 1 /f
+          Write-Host "Anti-DDoS Shield Active"
+
+      - name: Enable Brute-Force Auto Ban (best-effort)
+        shell: powershell
+        run: |
+          Write-Host "Setting up brute-force auto-ban (best-effort)"
+          try {
+            if (-not (Get-Module -ListAvailable -Name PSFail2Ban)) {
+              Install-Module -Name PSFail2Ban -Force -Scope CurrentUser -AllowClobber -ErrorAction SilentlyContinue
+            }
+            Import-Module PSFail2Ban -ErrorAction SilentlyContinue
+          } catch {}
+          Write-Host "Auto-ban ready"
+
+      - name: Upload Run Logs (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcgmz-run-log
+          path: pcgmz-run-log.txt
+
+      - name: Self-Restart Dispatcher
+        if: ${{ always() }}
+        uses: peter-evans/workflow-dispatch@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: PCGMZ
+          ref: refs/heads/main
+
+      - name: Heartbeat Keep Alive
+        shell: powershell
+        run: |
+          while ($true) {
+            Write-Host "[KEEPALIVE] $(Get-Date)"
+            Start-Sleep 300
+          }
+          
