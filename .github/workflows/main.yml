@@ -8,6 +8,7 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
+    # Runner timeout updated to 78 hours (72h runner + 6h chain headroom)
     timeout-minutes: 4680
 
     steps:
@@ -210,7 +211,7 @@ jobs:
           $script | Out-File $path
           Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File $path"
 
-      - name: Verify PCGMZ 
+      - name: Verify PCGMZ
         shell: powershell
         run: |
           if ($env:TS_IP) {
