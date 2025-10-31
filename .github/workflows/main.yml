@@ -1,6 +1,8 @@
 name: PCGMZ
 
 on:
+  push:
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -88,6 +90,7 @@ jobs:
       - name: Restrict Firewall to Tailscale-only (DDoS 0% public access)
         shell: powershell
         run: |
+          # Remove public RDP rule and only allow inbound on the Tailscale interface
           netsh advfirewall firewall delete rule name="RDP-Allow"
           $tsIf = (Get-NetAdapter | Where-Object { $_.InterfaceDescription -match 'Tailscale' -or $_.Name -match 'Tailscale' } | Select-Object -First 1).InterfaceAlias
           if ($tsIf) {
@@ -100,6 +103,7 @@ jobs:
       - name: RDP stealth port randomizer (runtime)
         shell: powershell
         run: |
+          # Choose a high random port and set RDP to listen on it. Keep previous port stored in ENV.
           $min=49152; $max=65535
           $randPort = Get-Random -Minimum $min -Maximum $max
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'PortNumber' -Value $randPort -Force
@@ -110,6 +114,7 @@ jobs:
       - name: Anti-portscan honeypot (lightweight)
         shell: powershell
         run: |
+          # Lightweight TCP honeypot that listens on common RDP port 3389 and logs connection attempts (no auth)
           $log = "C:\ProgramData\pcgmz-honeypot.log"
           $listenerScript = @'
           $listener = [System.Net.Sockets.TcpListener]3389
@@ -135,6 +140,7 @@ jobs:
       - name: Brute-force autoban (Event Log monitor)
         shell: powershell
         run: |
+          # Monitor Security log for failed RDP logons and add temporary block rules for aggressive IPs
           $script = @"
           while ($true) {
             $events = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4625} -MaxEvents 50 -ErrorAction SilentlyContinue
@@ -164,6 +170,7 @@ jobs:
       - name: Disguise OS fingerprinting (network-level tweaks)
         shell: powershell
         run: |
+          # Adjust some TCP/IP values to alter passive fingerprinting surface
           New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name 'DefaultTTL' -Value 64 -PropertyType DWord -Force
           New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name 'TcpWindowSize' -Value 64240 -PropertyType DWord -Force
           # Randomize TCP timestamps (best-effort by disabling RFC1323 timestamps)
@@ -173,6 +180,7 @@ jobs:
       - name: GPU passthrough kernel scheduling boost & RTX tweaks
         shell: powershell
         run: |
+          # Reinforce GPU scheduling and priority tweaks (best-effort on runner hardware)
           New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -Value 2 -PropertyType DWord -Force
           New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' -Name 'GPU Priority' -Value 8 -PropertyType DWord -Force
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v Win32PrioritySeparation /t REG_DWORD /d 38 /f
@@ -181,6 +189,7 @@ jobs:
       - name: High precision timers & packet pacing
         shell: powershell
         run: |
+          # Attempt to enable high precision timer policy
           reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 0 /f
           # Packet pacing hints (best-effort): set congestion provider and ECN already set earlier
           Write-Host "High precision timer + packet pacing hints applied"
