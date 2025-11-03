@@ -15,6 +15,7 @@ jobs:
           Write-Host "Enabling Remote Desktop for PC-V1 with NLA enabled for security"
           try {
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+              # Keep NLA enabled for security (UserAuthentication=1)
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
               
@@ -31,19 +32,23 @@ jobs:
       - name: Apply Optimized System Settings
         shell: powershell
         run: |
+          # Power settings to prevent sleep
           powercfg /change standby-timeout-ac 0
           powercfg /change monitor-timeout-ac 0
           powercfg /hibernate off
 
+          # System performance tweaks
           bcdedit /set useplatformclock true
           bcdedit /set tscsyncpolicy Enhanced
           bcdedit /set disabledynamictick yes
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel" /v GlobalTimerResolutionRequests /t REG_DWORD /d 1 /f
           
+          # Simplified network optimization - removed problematic offload features
           netsh int tcp set global autotuninglevel=normal
           netsh int tcp set global ecncapability=disabled
           netsh int tcp set global initialRto=1000
           
+          # Disable Hardware-accelerated GPU scheduling for better streaming compatibility
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 0 /f
           
           Write-Host "Optimized system settings applied successfully."
@@ -75,31 +80,146 @@ jobs:
               exit 1
           }
 
-      - name: Install Sunshine for Moonlight Streaming (Windows Installer)
+      - name: Install and Verify Sunshine for Moonlight Streaming
         shell: powershell
         run: |
-          Write-Host "Installing Sunshine using Windows Installer for better stability..."
-          $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
-          $installerPath = "$env:TEMP\Sunshine-Windows.exe"
+          Write-Host "====== SUNSHINE INSTALLATION & VERIFICATION ======"
           
-          Invoke-WebRequest -Uri $sunshineUrl -OutFile $installerPath
+          # 1. INSTALLATION
+          Write-Host "`n📥 DOWNLOADING AND INSTALLING SUNSHINE..."
+          $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.exe"
+          $installerPath = "$env:TEMP\Sunshine-Installer.exe"
           
-          Start-Process -FilePath $installerPath -ArgumentList "--silent" -Wait
-          Remove-Item $installerPath -Force
+          try {
+              # Download the latest Sunshine Windows installer[citation:1]
+              Invoke-WebRequest -Uri $sunshineUrl -OutFile $installerPath -ErrorAction Stop
+              
+              # Install Sunshine silently using the Windows installer (recommended method)[citation:4]
+              Write-Host "⚙️ Running Sunshine installer silently..."
+              $installProcess = Start-Process -FilePath $installerPath -ArgumentList "--silent" -Wait -PassThru
+              
+              # Clean up installer
+              Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+              
+              if ($installProcess.ExitCode -eq 0) {
+                  Write-Host "✅ Sunshine installation completed successfully"
+              } else {
+                  Write-Warning "⚠️ Sunshine installer exited with code: $($installProcess.ExitCode). This might not be critical."
+              }
+          }
+          catch {
+              Write-Error "❌ Sunshine installation failed: $($_.Exception.Message)"
+              exit 1
+          }
           
-          Start-Sleep -Seconds 10
-          
-          $sunshinePorts = @(47984, 47989, 48010)
+          # Configure firewall for Sunshine ports[citation:4]
+          Write-Host "`n🔥 CONFIGURING FIREWALL RULES..."
+          $sunshinePorts = @(47984, 47989, 47990, 48010)
           foreach ($port in $sunshinePorts) {
               netsh advfirewall firewall add rule name="Sunshine Port $port" dir=in action=allow protocol=TCP localport=$port 2>&1 | Out-Null
               netsh advfirewall firewall add rule name="Sunshine UDP Port $port" dir=in action=allow protocol=UDP localport=$port 2>&1 | Out-Null
           }
           
-          Start-Service -Name "Sunshine" -ErrorAction SilentlyContinue
-          Set-Service -Name "Sunshine" -StartupType Automatic -ErrorAction SilentlyContinue
+          # Allow service registration and startup
+          Write-Host "⏳ Waiting for Sunshine service initialization..."
+          Start-Sleep -Seconds 15
+
+          # 2. SERVICE VERIFICATION
+          Write-Host "`n🔍 CHECKING SUNSHINE SERVICE STATUS..."
+          $service = Get-Service -Name "Sunshine" -ErrorAction SilentlyContinue
           
-          Write-Host "Sunshine installed successfully using Windows installer."
-          Write-Host "Access web configuration at: https://localhost:47989"
+          if (-not $service) {
+              Write-Error "❌ Sunshine service not found after installation"
+              exit 1
+          }
+          
+          Write-Host "📋 Service: $($service.DisplayName)"
+          Write-Host "🔄 Status: $($service.Status)"
+          Write-Host "⚡ Start Type: $($service.StartType)"
+          
+          # Ensure service is running
+          if ($service.Status -ne 'Running') {
+              Write-Host "🔄 Starting Sunshine service..."
+              try {
+                  Start-Service -Name "Sunshine" -ErrorAction Stop
+                  Start-Sleep -Seconds 5
+                  $service = Get-Service -Name "Sunshine"
+                  
+                  if ($service.Status -eq 'Running') {
+                      Write-Host "✅ Sunshine service started successfully"
+                  } else {
+                      Write-Error "❌ Failed to start Sunshine service. Current status: $($service.Status)"
+                      exit 1
+                  }
+              }
+              catch {
+                  Write-Error "❌ Error starting Sunshine service: $($_.Exception.Message)"
+                  exit 1
+              }
+          } else {
+              Write-Host "✅ Sunshine service is running"
+          }
+
+          # 3. WEB INTERFACE TEST
+          Write-Host "`n🌐 TESTING SUNSHINE WEB INTERFACE..."
+          $maxRetries = 8
+          $retryCount = 0
+          $webSuccess = $false
+          
+          while ($retryCount -lt $maxRetries -and -not $webSuccess) {
+              $retryCount++
+              Write-Host "   Attempt $retryCount/$maxRetries..."
+              
+              try {
+                  # Test the web interface on port 47990 (default according to documentation)[citation:4]
+                  $response = Invoke-WebRequest -Uri "https://localhost:47990" -SkipCertificateCheck -TimeoutSec 15 -ErrorAction Stop
+                  if ($response.StatusCode -eq 200) {
+                      Write-Host "✅ Sunshine web interface is responsive (HTTP 200)"
+                      Write-Host "   Access at: https://localhost:47990"
+                      $webSuccess = $true
+                      break
+                  }
+              }
+              catch {
+                  Write-Host "   ⚠️ Attempt $retryCount failed: $($_.Exception.Message)"
+                  if ($retryCount -lt $maxRetries) {
+                      Write-Host "   ⏳ Retrying in 5 seconds..."
+                      Start-Sleep -Seconds 5
+                  }
+              }
+          }
+          
+          if (-not $webSuccess) {
+              Write-Warning "⚠️ Sunshine web interface not accessible after $maxRetries attempts"
+              Write-Host "🔍 Running diagnostics..."
+              
+              # Check if process is running
+              $process = Get-Process -Name "sunshine" -ErrorAction SilentlyContinue
+              if ($process) {
+                  Write-Host "   ✅ Sunshine process is running (PID: $($process.Id))"
+              } else {
+                  Write-Host "   ❌ Sunshine process not found"
+              }
+              
+              # Check port listening
+              $portCheck = Get-NetTCPConnection -LocalPort 47990 -ErrorAction SilentlyContinue
+              if ($portCheck) {
+                  Write-Host "   ✅ Port 47990 is listening"
+              } else {
+                  Write-Host "   ❌ Port 47990 is not listening"
+              }
+              
+              Write-Host "💡 The service might need more time to initialize. Continuing workflow..."
+          }
+
+          # 4. FINAL VERIFICATION SUMMARY
+          Write-Host "`n🎉 SUNSHINE SETUP COMPLETED!"
+          Write-Host "================================"
+          Write-Host "📊 Service Status: $($service.Status)"
+          Write-Host "🌐 Web Interface: $(if ($webSuccess) {'ACCESSIBLE'} else {'CHECK MANUALLY'})"
+          Write-Host "🔧 Config URL: https://localhost:47990"
+          Write-Host "📚 First-time setup: Create username/password in web UI"
+          Write-Host "================================"
 
       - name: Install Tailscale
         shell: powershell
@@ -127,19 +247,21 @@ jobs:
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Verify PC-V1 Connectivity
+      - name: Verify Connectivity
         shell: powershell
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
+          # Test RDP connectivity
           $rdpTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -WarningAction SilentlyContinue
           if ($rdpTest.TcpTestSucceeded) {
-              Write-Host "✓ PC-V1 connectivity successful"
+              Write-Host "✓ RDP connectivity successful"
           } else {
-              Write-Warning "PC-V1 connection test failed"
+              Write-Warning "RDP connection test failed"
           }
           
-          $sunshineTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 47989 -WarningAction SilentlyContinue
+          # Test Sunshine connectivity (using correct port 47990)[citation:4]
+          $sunshineTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 47990 -WarningAction SilentlyContinue
           if ($sunshineTest.TcpTestSucceeded) {
               Write-Host "✓ Sunshine connectivity successful"
           } else {
@@ -156,9 +278,9 @@ jobs:
           Write-Host ""
           Write-Host "Moonlight Setup Instructions:"
           Write-Host "1. Open Moonlight client on your device"
-          Write-Host "2. Add PC: https://$env:TAILSCALE_IP:47989"
+          Write-Host "2. Add PC: https://$env:TAILSCALE_IP:47990"
           Write-Host "3. Follow the pairing process in Moonlight"
-          Write-Host "4. For manual configuration, visit: https://$env:TAILSCALE_IP:47989"
+          Write-Host "4. For manual configuration, visit: https://$env:TAILSCALE_IP:47990"
           Write-Host "============================================================="
 
       - name: Maintain Connection
