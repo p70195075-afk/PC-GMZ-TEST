@@ -266,7 +266,6 @@ jobs:
                 Start-Sleep -Seconds 30
             }
         }
-"@
         
         $monitorScript | Out-File -FilePath "C:\Monitor-PC-V1.ps1" -Encoding UTF8
         
