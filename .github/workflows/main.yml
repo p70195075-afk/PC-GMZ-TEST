@@ -27,185 +27,122 @@ jobs:
       run: |
         Write-Host "=== APPLYING PREMIUM SYSTEM OPTIMIZATIONS ==="
         
-        # 🔧 POWER SETTINGS - Fixed with error handling
-        Write-Host "Configuring power settings..."
-        powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>&1 | Out-Null
-        powercfg /change standby-timeout-ac 0 2>&1 | Out-Null
-        powercfg /change monitor-timeout-ac 0 2>&1 | Out-Null
-        powercfg /hibernate off 2>&1 | Out-Null
-        
-        # 🌐 NETWORK OPTIMIZATIONS - Fixed commands
-        Write-Host "Optimizing network settings..."
-        netsh int tcp set global autotuninglevel=normal 2>&1 | Out-Null
-        netsh int tcp set global rss=enabled 2>&1 | Out-Null
-        netsh int tcp set global chimney=enabled 2>&1 | Out-Null
-        netsh int tcp set global dca=enabled 2>&1 | Out-Null
-        netsh int tcp set global netdma=enabled 2>&1 | Out-Null
-        
-        # 🎮 GAMING OPTIMIZATIONS - Fixed registry
-        Write-Host "Applying gaming optimizations..."
-        reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f 2>&1 | Out-Null
-        reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 4294967295 /f 2>&1 | Out-Null
-        
-        # 🔧 DISABLE UNNECESSARY SERVICES - Fixed with existence check
-        Write-Host "Optimizing services..."
-        $services = @("WerSvc", "DiagTrack", "WSearch", "XboxGipSvc", "XboxNetApiSvc")
-        foreach ($service in $services) {
-            try {
-                $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
-                if ($svc -and $svc.Status -ne "Stopped") {
-                    Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
+        try {
+            Write-Host "Configuring power settings..."
+            powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c | Out-Null
+            powercfg /change standby-timeout-ac 0 | Out-Null
+            powercfg /change monitor-timeout-ac 0 | Out-Null
+            powercfg /hibernate off | Out-Null
+
+            Write-Host "Optimizing network settings..."
+            netsh int tcp set global autotuninglevel=normal | Out-Null
+            netsh int tcp set global rss=enabled | Out-Null
+            netsh int tcp set global chimney=enabled | Out-Null
+            netsh int tcp set global dca=enabled | Out-Null
+            netsh int tcp set global netdma=enabled | Out-Null
+
+            Write-Host "Applying gaming optimizations..."
+            reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f | Out-Null
+            reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 4294967295 /f | Out-Null
+
+            Write-Host "Optimizing services..."
+            $services = @("WerSvc", "DiagTrack", "WSearch", "XboxGipSvc", "XboxNetApiSvc")
+            foreach ($service in $services) {
+                try {
+                    $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
+                    if ($svc -and $svc.Status -ne "Stopped") {
+                        Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
+                    }
+                    Set-Service -Name $service -StartupType Disabled -ErrorAction SilentlyContinue
+                    Write-Host "Disabled service: $service"
+                } catch {
+                    Write-Host "Skipped service: $service"
                 }
-                Set-Service -Name $service -StartupType Disabled -ErrorAction SilentlyContinue
-                Write-Host "✓ Disabled: $service"
-            } catch {
-                Write-Host "⚠️ Could not modify: $service"
             }
+
+            Write-Host "Premium system optimizations completed successfully!"
+        } catch {
+            Write-Host "Warning: Optimization block failed - $($_.Exception.Message)"
         }
-        
-        Write-Host "🎉 Premium system optimizations completed!"
 
     - name: 🖥️ Configure RDP Premium
       shell: powershell
       run: |
         Write-Host "=== CONFIGURING PREMIUM RDP ==="
-        
-        # Enable RDP with no authentication for Moonlight
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-        
-        # Enhanced RDP settings for streaming
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxMonitors" -Value 4 -Force
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxXResolution" -Value 3840 -Force
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxYResolution" -Value 2160 -Force
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "ColorDepth" -Value 4 -Force
-        
-        # Firewall rule
-        netsh advfirewall firewall add rule name="PC-V1-Premium-RDP" dir=in action=allow protocol=TCP localport=3389 description="Premium RDP for Moonlight" 2>&1 | Out-Null
-        
-        # Restart RDP service
+        netsh advfirewall firewall add rule name="PC-V1-Premium-RDP" dir=in action=allow protocol=TCP localport=3389 | Out-Null
         Restart-Service -Name TermService -Force
-        Write-Host "✓ Premium RDP configured successfully!"
+        Write-Host "Premium RDP configured successfully!"
 
     - name: 👤 Create Premium User
       shell: powershell
       run: |
         Write-Host "=== CREATING PREMIUM USER ==="
-        
-        # Generate ultra secure password
-        $upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-        $lower = 'abcdefghijklmnopqrstuvwxyz'
-        $numbers = '0123456789'
-        $special = '!@#$%^&*'
-        
-        $password = ''
-        $password += ($upper | Get-Random -Count 3) -join ''
-        $password += ($lower | Get-Random -Count 3) -join ''
-        $password += ($numbers | Get-Random -Count 3) -join ''
-        $password += ($special | Get-Random -Count 3) -join ''
-        $password = -join ($password.ToCharArray() | Sort-Object {Get-Random})
-        
+        $chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*'
+        $password = -join ((1..16) | ForEach-Object { $chars[(Get-Random -Maximum $chars.Length)] })
         $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-        
-        # Create user
+
+        if (Get-LocalUser -Name "PC-V1-Premium" -ErrorAction SilentlyContinue) {
+            Remove-LocalUser -Name "PC-V1-Premium"
+            Start-Sleep -Seconds 2
+        }
+
         New-LocalUser -Name "PC-V1-Premium" -Password $securePass -AccountNeverExpires -FullName "PC-V1 Premium Streaming"
         Add-LocalGroupMember -Group "Administrators" -Member "PC-V1-Premium"
         Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PC-V1-Premium"
-        
+
         echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
-        Write-Host "✓ Premium user created successfully!"
+        Write-Host "Premium user created successfully!"
 
     - name: 🌐 Install Tailscale
       shell: powershell
       run: |
         Write-Host "=== INSTALLING TAILSCALE ==="
-        $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-        $installerPath = "$env:TEMP\tailscale.msi"
-        
-        # Download with timeout
-        Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -TimeoutSec 30
-        Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-        Remove-Item $installerPath -Force
-        
-        Write-Host "✓ Tailscale installed successfully!"
+        $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+        $file = "$env:TEMP\tailscale.msi"
+        Invoke-WebRequest -Uri $url -OutFile $file
+        Start-Process msiexec.exe -ArgumentList "/i `"$file`" /quiet /norestart" -Wait
+        Remove-Item $file -Force
+        Write-Host "Tailscale installed successfully!"
 
     - name: 🔗 Connect Tailscale
       shell: powershell
       run: |
-        Write-Host "=== CONNECTING TAILSCALE ==="
-        
-        # Start service and connect
-        Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+        Start-Service Tailscale -ErrorAction SilentlyContinue
         & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=pc-v1-premium
-        
-        # Get IP with retry
-        $tsIP = $null
-        for ($i = 1; $i -le 12; $i++) {
-            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-            if ($tsIP -and $tsIP -match '^\d+\.\d+\.\d+\.\d+$') {
-                break
-            }
-            Start-Sleep -Seconds 5
-        }
-        
-        if (-not $tsIP) {
-            Write-Error "❌ Tailscale IP not assigned"
-            exit 1
-        }
-        
+        Start-Sleep -Seconds 5
+        $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4)
         echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-        Write-Host "✓ Tailscale connected: $tsIP"
+        Write-Host "Connected to Tailscale - IP: $tsIP"
 
     - name: ✅ Verify Connection
       shell: powershell
       run: |
-        Write-Host "=== VERIFYING CONNECTION ==="
-        
-        # Test RDP port
         $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -InformationLevel Quiet
         if (-not $test) {
-            Write-Error "❌ RDP connection test failed"
+            Write-Error "RDP connection test failed!"
             exit 1
         }
-        
-        Write-Host "✓ RDP Connection verified successfully!"
-        Write-Host "✓ Ready for Moonlight streaming!"
+        Write-Host "RDP connection verified!"
 
     - name: 📋 Display Connection Info
       shell: powershell
       run: |
         Write-Host ""
-        Write-Host "╔══════════════════════════════════════╗"
-        Write-Host "║           PC-V1 PREMIUM READY       ║"
-        Write-Host "╠══════════════════════════════════════╣"
-        Write-Host "║  🌐 Address:  $env:TAILSCALE_IP"
-        Write-Host "║  👤 Username: PC-V1-Premium"
-        Write-Host "║  🔐 Password: $env:PCV1_PASSWORD"
-        Write-Host "║  🎮 Quality:  ${{ env.STREAM_QUALITY }}"
-        Write-Host "║  ⚡ Status:   OPTIMIZED FOR MOONLIGHT"
-        Write-Host "╚══════════════════════════════════════╝"
-        Write-Host ""
-        Write-Host "🎮 Moonlight Configuration:"
-        Write-Host "   • Resolution: 1080p/1440p/4K"
-        Write-Host "   • Bitrate: 20-80 Mbps"
-        Write-Host "   • Codec: HEVC recommended"
-        Write-Host "   • Frame Rate: 60/120 Hz"
-        Write-Host ""
+        Write-Host "========= PC-V1 PREMIUM READY ========="
+        Write-Host "Address:  $env:TAILSCALE_IP"
+        Write-Host "Username: PC-V1-Premium"
+        Write-Host "Password: $env:PCV1_PASSWORD"
+        Write-Host "Quality:  ${{ env.STREAM_QUALITY }}"
+        Write-Host "======================================"
 
     - name: 🛡️ Keep Alive
       shell: powershell
       run: |
         Write-Host "=== PC-V1 PREMIUM ACTIVE ==="
-        Write-Host "Address: $env:TAILSCALE_IP"
-        Write-Host "Streaming: ${{ env.STREAM_QUALITY }} quality"
-        Write-Host "Duration: 6 hours max"
-        Write-Host "Use Ctrl+C in workflow to stop early"
-        Write-Host "============================="
-        
-        # Simple keep-alive with basic monitoring
         for ($i = 1; $i -le 72; $i++) {
-            $time = Get-Date -Format "HH:mm:ss"
-            Write-Host "[$time] PC-V1 Active - Check $i/72"
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Keep-alive check $i/72"
             Start-Sleep -Seconds 300
         }
