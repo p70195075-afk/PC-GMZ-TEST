@@ -92,69 +92,145 @@ jobs:
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           Write-Host "✅ Connected to Tailscale - IP: $tsIP"
 
-      - name: Install Sunshine (Auto-Fix v2 Stable)
+      - name: Install Sunshine (ULTIMATE FIX - NO ERROR)
         shell: powershell
         run: |
-          Write-Host "🌞 Installing Sunshine (Auto-Fix v2 Stable)..."
-          $ErrorActionPreference = "Continue"
-          $tempDir = "$env:TEMP\sunshine"
-          New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-
-          $urls = @(
-            "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-x86_64.msi",
-            "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe",
-            "https://mirror.ghproxy.com/https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe",
-            "https://download.lizardbyte.dev/Sunshine-Windows.exe"
-          )
-
-          $success = $false
-          foreach ($url in $urls) {
-              try {
-                  Write-Host "⏬ Attempting download: $url"
-                  $file = Join-Path $tempDir ([System.IO.Path]::GetFileName($url))
-                  
+          Write-Host "🌞 Installing Sunshine (ULTIMATE FIX)..."
+          
+          # Method 1: Try direct download and install (most reliable)
+          try {
+              Write-Host "📥 Method 1: Direct download from GitHub..."
+              $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
+              $installerPath = "$env:TEMP\Sunshine-Setup.exe"
+              
+              # Download with retry logic
+              $maxRetries = 3
+              $retryCount = 0
+              $downloadSuccess = $false
+              
+              while ($retryCount -lt $maxRetries -and -not $downloadSuccess) {
                   try {
-                      Start-BitsTransfer -Source $url -Destination $file -ErrorAction Stop
-                  } catch {
-                      Invoke-WebRequest -Uri $url -OutFile $file -UseBasicParsing -ErrorAction Stop
-                  }
-
-                  if (Test-Path $file) {
-                      Write-Host "✅ Download success: $file"
-                      if ($file -like "*.msi") {
-                          Start-Process "msiexec.exe" -ArgumentList "/i", "`"$file`"", "/quiet", "/norestart" -Wait
-                      } else {
-                          Start-Process $file -ArgumentList "/SILENT", "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait
+                      Invoke-WebRequest -Uri $sunshineUrl -OutFile $installerPath -TimeoutSec 30
+                      if (Test-Path $installerPath -PathType Leaf) {
+                          $downloadSuccess = $true
+                          Write-Host "✅ Download successful (attempt $($retryCount + 1))"
                       }
-                      $success = $true
+                  } catch {
+                      $retryCount++
+                      Write-Host "⚠️ Download failed, retrying... ($retryCount/$maxRetries)"
+                      if ($retryCount -lt $maxRetries) {
+                          Start-Sleep -Seconds 5
+                      }
+                  }
+              }
+              
+              if ($downloadSuccess) {
+                  Write-Host "⚙️ Running Sunshine installer..."
+                  $process = Start-Process -FilePath $installerPath -ArgumentList "--silent" -Wait -PassThru
+                  
+                  if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010) {
+                      Write-Host "✅ Sunshine installed successfully (Exit code: $($process.ExitCode))"
+                  } else {
+                      Write-Host "⚠️ Installer finished with exit code: $($process.ExitCode)"
+                  }
+                  
+                  # Cleanup
+                  Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+              } else {
+                  Write-Host "❌ All download attempts failed"
+              }
+          } catch {
+              Write-Host "⚠️ Method 1 failed: $($_.Exception.Message)"
+          }
+          
+          # Wait for installation to complete
+          Write-Host "⏳ Waiting for installation to complete..."
+          Start-Sleep -Seconds 10
+          
+          # Method 2: Manual extraction as fallback
+          if (-not (Test-Path "$env:ProgramFiles\Sunshine\sunshine.exe")) {
+              Write-Host "🔄 Method 2: Trying portable version..."
+              try {
+                  $portableUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.zip"
+                  $zipPath = "$env:TEMP\Sunshine-Portable.zip"
+                  $extractPath = "$env:ProgramFiles\Sunshine"
+                  
+                  Invoke-WebRequest -Uri $portableUrl -OutFile $zipPath
+                  
+                  # Create directory and extract
+                  New-Item -ItemType Directory -Force -Path $extractPath | Out-Null
+                  Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+                  
+                  Remove-Item $zipPath -Force
+                  
+                  Write-Host "✅ Portable version extracted"
+              } catch {
+                  Write-Host "⚠️ Portable method also failed: $($_.Exception.Message)"
+              }
+          }
+          
+          # Configure firewall regardless of installation method
+          Write-Host "🔥 Configuring firewall rules..."
+          $ports = @(47984, 47989, 47990, 48010)
+          foreach ($port in $ports) {
+              try {
+                  netsh advfirewall firewall add rule name="Sunshine-TCP-$port" dir=in action=allow protocol=TCP localport=$port 2>&1 | Out-Null
+                  netsh advfirewall firewall add rule name="Sunshine-UDP-$port" dir=in action=allow protocol=UDP localport=$port 2>&1 | Out-Null
+              } catch {
+                  Write-Host "⚠️ Failed to add firewall rule for port $port"
+              }
+          }
+          
+          # Final verification
+          if (Test-Path "$env:ProgramFiles\Sunshine\sunshine.exe") {
+              Write-Host "🎉 Sunshine installation completed successfully!"
+          } else {
+              Write-Host "⚠️ Sunshine may not be fully installed, but continuing workflow..."
+          }
+
+      - name: Start Sunshine Service (NO FAIL)
+        shell: powershell
+        run: |
+          Write-Host "🔧 Starting Sunshine service..."
+          
+          # Try multiple methods to start Sunshine
+          $methods = @(
+              { Start-Service -Name "Sunshine" -ErrorAction SilentlyContinue },
+              { Start-Process "$env:ProgramFiles\Sunshine\sunshine.exe" -ErrorAction SilentlyContinue },
+              { & "$env:ProgramFiles\Sunshine\sunshine.exe" --help 2>&1 | Out-Null }
+          )
+          
+          $started = $false
+          foreach ($method in $methods) {
+              try {
+                  & $method
+                  Start-Sleep -Seconds 3
+                  
+                  # Check if it's running
+                  $process = Get-Process -Name "sunshine" -ErrorAction SilentlyContinue
+                  $service = Get-Service -Name "Sunshine" -ErrorAction SilentlyContinue
+                  
+                  if ($process -or ($service -and $service.Status -eq 'Running')) {
+                      $started = $true
+                      Write-Host "✅ Sunshine is running"
                       break
                   }
               } catch {
-                  Write-Host "⚠️ Failed on: $url — trying next mirror..."
+                  Write-Host "⚠️ Startup method failed, trying next..."
               }
           }
-
-          Start-Sleep -Seconds 6
-          Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-
-          if (Test-Path "$env:ProgramFiles\Sunshine\sunshine.exe") {
-              Write-Host "✅ Sunshine installed successfully!"
-          } elseif ($success -eq $false) {
-              Write-Host "⚠️ All download attempts failed, skipping Sunshine install (runner connection unstable)."
-          } else {
-              Write-Host "⚠️ Sunshine installer ran but file not found — continuing."
+          
+          if (-not $started) {
+              Write-Host "⚠️ Could not start Sunshine automatically - may need manual setup"
           }
-
-      - name: Verify Sunshine
-        shell: powershell
-        run: |
-          Start-Sleep -Seconds 8
-          $service = Get-Service -Name "Sunshine" -ErrorAction SilentlyContinue
-          if ($service) {
-              if ($service.Status -ne 'Running') { Start-Service Sunshine }
-              Write-Host "✅ Sunshine service is running."
-          } else {
-              Write-Host "⚠️ Sunshine service not detected, continuing."
+          
+          # Test web interface
+          Write-Host "🌐 Testing web interface..."
+          try {
+              $response = Invoke-WebRequest -Uri "https://localhost:47990" -UseBasicParsing -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
+              Write-Host "✅ Web interface is accessible"
+          } catch {
+              Write-Host "⚠️ Web interface not ready yet - normal for first setup"
           }
 
       - name: Show Connection Info
@@ -170,12 +246,17 @@ jobs:
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: PC-V1"
           Write-Host "Password: $env:PCV1_PASSWORD"
+          Write-Host ""
+          Write-Host "Moonlight Streaming:"
+          Write-Host "URL: https://$env:TAILSCALE_IP:47990"
+          Write-Host "First-time setup: Open in browser to configure"
           Write-Host "============================================================="
 
       - name: Keep Alive
         shell: powershell
         run: |
           while ($true) {
-              Write-Host "[$(Get-Date)] PC-V1 Active - RDP: $env:TAILSCALE_IP"
+              Write-Host "[$(Get-Date)] PC-V1 Active - RDP: $env:TAILSCALE_IP - Moonlight: https://$env:TAILSCALE_IP:47990"
+              Write-Host "Press Ctrl+C in Actions to stop this session"
               Start-Sleep -Seconds 300
           }
