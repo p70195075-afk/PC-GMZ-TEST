@@ -42,123 +42,233 @@ jobs:
 
           Write-Host "✅ System optimizations applied!"
 
-      - name: Create PC-V1 User with Secure Password
+      - name: Create PC-V1 User with Secure Password (Fixed)
         shell: powershell
         run: |
-          $password = [guid]::NewGuid().ToString('N').Substring(0,10)
-          net user PC-V1 $password /add
-          net localgroup administrators PC-V1 /add
+          Write-Host "👤 Creating PC-V1 user account..."
+          
+          # Generate secure password that meets Windows complexity requirements
+          Add-Type -AssemblyName System.Web
+          do {
+              $password = [System.Web.Security.Membership]::GeneratePassword(16, 4)
+          } while ($password -notmatch '[A-Z]' -or $password -notmatch '[a-z]' -or $password -notmatch '[0-9]' -or $password -notmatch '[^a-zA-Z0-9]')
+          
+          # Check if user already exists and remove if so
+          $existingUser = Get-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
+          if ($existingUser) {
+              Write-Host "🔄 Removing existing PC-V1 user..."
+              Remove-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 2
+          }
+          
+          # Create new user with secure password
+          try {
+              $securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
+              New-LocalUser -Name "PC-V1" -Password $securePassword -AccountNeverExpires -ErrorAction Stop
+              Write-Host "✅ User created successfully"
+          }
+          catch {
+              Write-Error "❌ Failed to create user: $($_.Exception.Message)"
+              exit 1
+          }
+          
+          # Add to administrators group
+          try {
+              Add-LocalGroupMember -Group "Administrators" -Member "PC-V1" -ErrorAction Stop
+              Write-Host "✅ Added to Administrators group"
+          }
+          catch {
+              Write-Error "❌ Failed to add to Administrators: $($_.Exception.Message)"
+              exit 1
+          }
+          
+          # Add to Remote Desktop Users group
+          try {
+              Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PC-V1" -ErrorAction Stop
+              Write-Host "✅ Added to Remote Desktop Users group"
+          }
+          catch {
+              Write-Error "❌ Failed to add to RDP Users: $($_.Exception.Message)"
+              exit 1
+          }
+          
+          # Store password in environment variable
+          echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
+          
+          Write-Host ""
           Write-Host "=== PC-V1 ACCESS ==="
-          Write-Host "Address: $env:COMPUTERNAME (via Tailscale or RDP)"
           Write-Host "Username: PC-V1"
           Write-Host "Password: $password"
           Write-Host "===================="
+
+      - name: Enable and Configure Remote Desktop
+        shell: powershell
+        run: |
+          Write-Host "🔧 Configuring Remote Desktop..."
+          try {
+              # Enable RDP
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+              
+              # Configure NLA for security
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+              
+              # Configure firewall
+              netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+              netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+              
+              # Restart Terminal Services
+              Restart-Service -Name "TermService" -Force
+              
+              Write-Host "✅ Remote Desktop configured successfully"
+          }
+          catch {
+              Write-Error "❌ RDP configuration failed: $($_.Exception.Message)"
+              exit 1
+          }
 
       - name: Install Tailscale
         shell: powershell
         run: |
           Write-Host "🌐 Installing Tailscale..."
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "C:\tailscale.exe"
-          Start-Process "C:\tailscale.exe" -ArgumentList "/quiet" -Wait
-          Write-Host "✅ Tailscale installed successfully."
+          try {
+              $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+              $installerPath = "$env:TEMP\tailscale.msi"
+              Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -ErrorAction Stop
+              Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait -ErrorAction Stop
+              Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+              Write-Host "✅ Tailscale installed successfully"
+          }
+          catch {
+              Write-Error "❌ Tailscale installation failed: $($_.Exception.Message)"
+              exit 1
+          }
 
       - name: Establish Tailscale Connection
         shell: powershell
         run: |
-          Start-Process "C:\Program Files\Tailscale\tailscale.exe" up --accept-routes --accept-dns=false
-          Write-Host "🟢 Tailscale connection established."
-          $ip = (tailscale ip -4)
-          Write-Host "Tailscale IP: $ip"
+          Write-Host "🔗 Connecting to Tailscale..."
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=PC-V1 --accept-routes --accept-dns=false
+          
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              if (-not $tsIP) {
+                  $retries++
+                  Write-Host "⏳ Waiting for Tailscale IP... ($retries/10)"
+                  Start-Sleep -Seconds 5
+              }
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "❌ Tailscale IP not assigned after 10 attempts"
+              exit 1
+          }
+          
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          Write-Host "✅ Tailscale connected - IP: $tsIP"
 
       - name: Install and Verify Sunshine for Moonlight Streaming
         shell: powershell
         run: |
           Write-Host "🌞 Installing Sunshine..."
-          $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/SunshineSetup.exe"
-          Invoke-WebRequest $sunshineUrl -OutFile "C:\SunshineSetup.exe"
-          Start-Process "C:\SunshineSetup.exe" -ArgumentList "/VERYSILENT" -Wait
-          Start-Service Sunshine
-          Start-Sleep -Seconds 10
-
-          $service = Get-Service Sunshine -ErrorAction SilentlyContinue
-          if ($service -and $service.Status -eq "Running") {
-              Write-Host "✅ Sunshine service is running!"
-          } else {
-              Write-Host "❌ Sunshine failed to start. Check logs."
-          }
-
-          # Web interface check
           try {
-              $webTest = Invoke-WebRequest -Uri "https://localhost:47990" -UseBasicParsing -SkipCertificateCheck -TimeoutSec 5
-              $webSuccess = $true
-          } catch {
-              $webSuccess = $false
+              $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
+              $installerPath = "$env:TEMP\SunshineSetup.exe"
+              Invoke-WebRequest $sunshineUrl -OutFile $installerPath -ErrorAction Stop
+              Start-Process $installerPath -ArgumentList "--silent" -Wait -ErrorAction Stop
+              Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+              
+              # Wait for installation to complete
+              Start-Sleep -Seconds 10
+              
+              # Configure firewall for Sunshine
+              $ports = @(47984, 47989, 47990, 48010)
+              foreach ($port in $ports) {
+                  netsh advfirewall firewall add rule name="Sunshine-TCP-$port" dir=in action=allow protocol=TCP localport=$port
+                  netsh advfirewall firewall add rule name="Sunshine-UDP-$port" dir=in action=allow protocol=UDP localport=$port
+              }
+              
+              Write-Host "✅ Sunshine installed successfully"
           }
-
-          Write-Host ""
-          Write-Host "🎉 SUNSHINE SETUP COMPLETED!"
-          Write-Host "================================"
-          if ($webSuccess) {
-              $webStatus = "ACCESSIBLE"
-          } else {
-              $webStatus = "CHECK MANUALLY"
-          }
-          Write-Host "📊 Service Status: $($service.Status)"
-          Write-Host "🌐 Web Interface: $webStatus"
-          Write-Host "🔧 Config URL: https://localhost:47990"
-          Write-Host "📚 Setup in browser if needed."
-          Write-Host "================================"
-
-      - name: Install Tailscale
-        shell: powershell
-        run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-
-      - name: Establish Tailscale Connection
-        shell: powershell
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=PC-V1
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries < 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
+          catch {
+              Write-Error "❌ Sunshine installation failed: $($_.Exception.Message)"
               exit 1
           }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Verify Sunshine Service
+        shell: powershell
+        run: |
+          Write-Host "🔍 Verifying Sunshine service..."
+          Start-Sleep -Seconds 10
+          
+          $service = Get-Service -Name "Sunshine" -ErrorAction SilentlyContinue
+          if (-not $service) {
+              Write-Warning "⚠️ Sunshine service not found, attempting to start manually..."
+              # Try to start Sunshine executable directly
+              $sunshinePath = "$env:PROGRAMFILES\Sunshine\sunshine.exe"
+              if (Test-Path $sunshinePath) {
+                  Start-Process $sunshinePath
+                  Start-Sleep -Seconds 5
+              }
+              $service = Get-Service -Name "Sunshine" -ErrorAction SilentlyContinue
+          }
+          
+          if ($service) {
+              if ($service.Status -ne 'Running') {
+                  Start-Service -Name "Sunshine" -ErrorAction SilentlyContinue
+                  Start-Sleep -Seconds 5
+                  $service = Get-Service -Name "Sunshine"
+              }
+              Write-Host "✅ Sunshine service status: $($service.Status)"
+          } else {
+              Write-Warning "⚠️ Sunshine service not available, but continuing..."
+          }
+          
+          # Test web interface
+          $webSuccess = $false
+          for ($i = 1; $i -le 5; $i++) {
+              try {
+                  $response = Invoke-WebRequest -Uri "https://localhost:47990" -UseBasicParsing -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
+                  if ($response.StatusCode -eq 200) {
+                      $webSuccess = $true
+                      break
+                  }
+              }
+              catch {
+                  Write-Host "⏳ Web interface not ready yet... ($i/5)"
+                  Start-Sleep -Seconds 5
+              }
+          }
+          
+          Write-Host "🌐 Web Interface: $(if ($webSuccess) {'ACCESSIBLE'} else {'NOT ACCESSIBLE'})"
 
       - name: Verify Connectivity
         shell: powershell
         run: |
+          Write-Host "📡 Testing connectivity..."
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
           # Test RDP connectivity
           $rdpTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -WarningAction SilentlyContinue
           if ($rdpTest.TcpTestSucceeded) {
-              Write-Host "✓ RDP connectivity successful"
+              Write-Host "✅ RDP connectivity successful"
           } else {
-              Write-Warning "RDP connection test failed"
+              Write-Warning "⚠️ RDP connection test failed"
           }
           
-          # Test Sunshine connectivity (using correct port 47990)[citation:4]
+          # Test Sunshine connectivity
           $sunshineTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 47990 -WarningAction SilentlyContinue
           if ($sunshineTest.TcpTestSucceeded) {
-              Write-Host "✓ Sunshine connectivity successful"
+              Write-Host "✅ Sunshine connectivity successful"
           } else {
-              Write-Warning "Sunshine connection test failed"
+              Write-Warning "⚠️ Sunshine connection test failed"
           }
 
       - name: Display Connection Information
         shell: powershell
         run: |
+          Write-Host ""
           Write-Host "=================== PC-V1 SETUP COMPLETE ==================="
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           Write-Host "RDP Username: PC-V1"
@@ -169,11 +279,17 @@ jobs:
           Write-Host "2. Add PC: https://$env:TAILSCALE_IP:47990"
           Write-Host "3. Follow the pairing process in Moonlight"
           Write-Host "4. For manual configuration, visit: https://$env:TAILSCALE_IP:47990"
+          Write-Host ""
+          Write-Host "Remote Desktop:"
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: PC-V1"
+          Write-Host "Password: $env:PCV1_PASSWORD"
           Write-Host "============================================================="
 
       - name: Maintain Connection
         shell: powershell
         run: |
+          Write-Host "🔄 Maintaining active connection..."
           while ($true) {
               Write-Host "[$(Get-Date)] PC-V1 Active - Moonlight ready at $env:TAILSCALE_IP"
               Write-Host "Use Ctrl+C in workflow to terminate this session"
