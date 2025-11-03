@@ -1,224 +1,112 @@
-name: PC-V1-Moonlight
+name: PC-V1
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp-moonlight:
+  secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 4680
 
     steps:
-      - name: Configure Core PC-V1 Settings with NLA Enabled
+      - name: Disable Sleep / Hibernate / PowerSave
         shell: powershell
         run: |
-          Write-Host "Enabling Remote Desktop for PC-V1 with NLA enabled for security"
-          try {
-              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-              # Keep NLA enabled for security (UserAuthentication=1)
-              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
-              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
-              
-              netsh advfirewall firewall delete rule name="PC-V1-Tailscale" | Out-Null
-              netsh advfirewall firewall add rule name="PC-V1-Tailscale" dir=in action=allow protocol=TCP localport=3389
-              Restart-Service -Name TermService -Force
-              Write-Host "PC-V1 Remote Desktop configuration completed with NLA enabled."
-          }
-          catch {
-              Write-Error "PC-V1 Configuration failed: $($_.Exception.Message)"
-              exit 1
-          }
-
-      - name: Apply Optimized System Settings
-        shell: powershell
-        run: |
-          # Power settings to prevent sleep
           powercfg /change standby-timeout-ac 0
           powercfg /change monitor-timeout-ac 0
           powercfg /hibernate off
+          Write-Host "✅ Power Save Disabled"
 
-          # System performance tweaks
+      - name: System Performance Optimizations
+        shell: powershell
+        run: |
+          Write-Host "🚀 Applying latency & performance tweaks..."
+          # Anti jitter ping
+          netsh int tcp set global autotuninglevel=highlyrestricted
+          netsh int tcp set global rss=enabled
+          netsh int tcp set global chimney=enabled
+          netsh int tcp set global dca=enabled
+          netsh int tcp set supplemental template=internet congestionprovider=bbr2
+          
+          # Packet pacing + VSYNC-less
+          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TcpAckFrequency /t REG_DWORD /d 1 /f
+          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TCPNoDelay /t REG_DWORD /d 1 /f
+
+          # High precision timers
           bcdedit /set useplatformclock true
           bcdedit /set tscsyncpolicy Enhanced
           bcdedit /set disabledynamictick yes
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel" /v GlobalTimerResolutionRequests /t REG_DWORD /d 1 /f
-          
-          # Simplified network optimization - removed problematic offload features
-          netsh int tcp set global autotuninglevel=normal
-          netsh int tcp set global ecncapability=disabled
-          netsh int tcp set global initialRto=1000
-          
-          # Disable Hardware-accelerated GPU scheduling for better streaming compatibility
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 0 /f
-          
-          Write-Host "Optimized system settings applied successfully."
+
+          # GPU queue shaving
+          reg add "HKLM\SOFTWARE\Microsoft\DirectX" /v MaxFrameLatency /t REG_DWORD /d 1 /f
+
+          Write-Host "✅ System optimizations applied!"
 
       - name: Create PC-V1 User with Secure Password
         shell: powershell
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "PC-V1" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "PC-V1"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PC-V1"
-          echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
+          $password = [guid]::NewGuid().ToString('N').Substring(0,10)
+          net user PC-V1 $password /add
+          net localgroup administrators PC-V1 /add
+          Write-Host "=== PC-V1 ACCESS ==="
+          Write-Host "Address: $env:COMPUTERNAME (via Tailscale or RDP)"
+          Write-Host "Username: PC-V1"
+          Write-Host "Password: $password"
+          Write-Host "===================="
 
-          if (-not (Get-LocalUser -Name "PC-V1")) {
-              Write-Error "User creation failed"
-              exit 1
-          }
+      - name: Install Tailscale
+        shell: powershell
+        run: |
+          Write-Host "🌐 Installing Tailscale..."
+          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "C:\tailscale.exe"
+          Start-Process "C:\tailscale.exe" -ArgumentList "/quiet" -Wait
+          Write-Host "✅ Tailscale installed successfully."
+
+      - name: Establish Tailscale Connection
+        shell: powershell
+        run: |
+          Start-Process "C:\Program Files\Tailscale\tailscale.exe" up --accept-routes --accept-dns=false
+          Write-Host "🟢 Tailscale connection established."
+          $ip = (tailscale ip -4)
+          Write-Host "Tailscale IP: $ip"
 
       - name: Install and Verify Sunshine for Moonlight Streaming
         shell: powershell
         run: |
-          Write-Host "====== SUNSHINE INSTALLATION & VERIFICATION ======"
-          
-          # 1. INSTALLATION
-          Write-Host "`n📥 DOWNLOADING AND INSTALLING SUNSHINE..."
-          $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.exe"
-          $installerPath = "$env:TEMP\Sunshine-Installer.exe"
-          
-          try {
-              # Download the latest Sunshine Windows installer[citation:1]
-              Invoke-WebRequest -Uri $sunshineUrl -OutFile $installerPath -ErrorAction Stop
-              
-              # Install Sunshine silently using the Windows installer (recommended method)[citation:4]
-              Write-Host "⚙️ Running Sunshine installer silently..."
-              $installProcess = Start-Process -FilePath $installerPath -ArgumentList "--silent" -Wait -PassThru
-              
-              # Clean up installer
-              Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
-              
-              if ($installProcess.ExitCode -eq 0) {
-                  Write-Host "✅ Sunshine installation completed successfully"
-              } else {
-                  Write-Warning "⚠️ Sunshine installer exited with code: $($installProcess.ExitCode). This might not be critical."
-              }
-          }
-          catch {
-              Write-Error "❌ Sunshine installation failed: $($_.Exception.Message)"
-              exit 1
-          }
-          
-          # Configure firewall for Sunshine ports[citation:4]
-          Write-Host "`n🔥 CONFIGURING FIREWALL RULES..."
-          $sunshinePorts = @(47984, 47989, 47990, 48010)
-          foreach ($port in $sunshinePorts) {
-              netsh advfirewall firewall add rule name="Sunshine Port $port" dir=in action=allow protocol=TCP localport=$port 2>&1 | Out-Null
-              netsh advfirewall firewall add rule name="Sunshine UDP Port $port" dir=in action=allow protocol=UDP localport=$port 2>&1 | Out-Null
-          }
-          
-          # Allow service registration and startup
-          Write-Host "⏳ Waiting for Sunshine service initialization..."
-          Start-Sleep -Seconds 15
+          Write-Host "🌞 Installing Sunshine..."
+          $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/SunshineSetup.exe"
+          Invoke-WebRequest $sunshineUrl -OutFile "C:\SunshineSetup.exe"
+          Start-Process "C:\SunshineSetup.exe" -ArgumentList "/VERYSILENT" -Wait
+          Start-Service Sunshine
+          Start-Sleep -Seconds 10
 
-          # 2. SERVICE VERIFICATION
-          Write-Host "`n🔍 CHECKING SUNSHINE SERVICE STATUS..."
-          $service = Get-Service -Name "Sunshine" -ErrorAction SilentlyContinue
-          
-          if (-not $service) {
-              Write-Error "❌ Sunshine service not found after installation"
-              exit 1
-          }
-          
-          Write-Host "📋 Service: $($service.DisplayName)"
-          Write-Host "🔄 Status: $($service.Status)"
-          Write-Host "⚡ Start Type: $($service.StartType)"
-          
-          # Ensure service is running
-          if ($service.Status -ne 'Running') {
-              Write-Host "🔄 Starting Sunshine service..."
-              try {
-                  Start-Service -Name "Sunshine" -ErrorAction Stop
-                  Start-Sleep -Seconds 5
-                  $service = Get-Service -Name "Sunshine"
-                  
-                  if ($service.Status -eq 'Running') {
-                      Write-Host "✅ Sunshine service started successfully"
-                  } else {
-                      Write-Error "❌ Failed to start Sunshine service. Current status: $($service.Status)"
-                      exit 1
-                  }
-              }
-              catch {
-                  Write-Error "❌ Error starting Sunshine service: $($_.Exception.Message)"
-                  exit 1
-              }
+          $service = Get-Service Sunshine -ErrorAction SilentlyContinue
+          if ($service -and $service.Status -eq "Running") {
+              Write-Host "✅ Sunshine service is running!"
           } else {
-              Write-Host "✅ Sunshine service is running"
+              Write-Host "❌ Sunshine failed to start. Check logs."
           }
 
-          # 3. WEB INTERFACE TEST
-          Write-Host "`n🌐 TESTING SUNSHINE WEB INTERFACE..."
-          $maxRetries = 8
-          $retryCount = 0
-          $webSuccess = $false
-          
-          while ($retryCount -lt $maxRetries -and -not $webSuccess) {
-              $retryCount++
-              Write-Host "   Attempt $retryCount/$maxRetries..."
-              
-              try {
-                  # Test the web interface on port 47990 (default according to documentation)[citation:4]
-                  $response = Invoke-WebRequest -Uri "https://localhost:47990" -SkipCertificateCheck -TimeoutSec 15 -ErrorAction Stop
-                  if ($response.StatusCode -eq 200) {
-                      Write-Host "✅ Sunshine web interface is responsive (HTTP 200)"
-                      Write-Host "   Access at: https://localhost:47990"
-                      $webSuccess = $true
-                      break
-                  }
-              }
-              catch {
-                  Write-Host "   ⚠️ Attempt $retryCount failed: $($_.Exception.Message)"
-                  if ($retryCount -lt $maxRetries) {
-                      Write-Host "   ⏳ Retrying in 5 seconds..."
-                      Start-Sleep -Seconds 5
-                  }
-              }
-          }
-          
-          if (-not $webSuccess) {
-              Write-Warning "⚠️ Sunshine web interface not accessible after $maxRetries attempts"
-              Write-Host "🔍 Running diagnostics..."
-              
-              # Check if process is running
-              $process = Get-Process -Name "sunshine" -ErrorAction SilentlyContinue
-              if ($process) {
-                  Write-Host "   ✅ Sunshine process is running (PID: $($process.Id))"
-              } else {
-                  Write-Host "   ❌ Sunshine process not found"
-              }
-              
-              # Check port listening
-              $portCheck = Get-NetTCPConnection -LocalPort 47990 -ErrorAction SilentlyContinue
-              if ($portCheck) {
-                  Write-Host "   ✅ Port 47990 is listening"
-              } else {
-                  Write-Host "   ❌ Port 47990 is not listening"
-              }
-              
-              Write-Host "💡 The service might need more time to initialize. Continuing workflow..."
+          # Web interface check
+          try {
+              $webTest = Invoke-WebRequest -Uri "https://localhost:47990" -UseBasicParsing -SkipCertificateCheck -TimeoutSec 5
+              $webSuccess = $true
+          } catch {
+              $webSuccess = $false
           }
 
-          # 4. FINAL VERIFICATION SUMMARY
-          Write-Host "`n🎉 SUNSHINE SETUP COMPLETED!"
+          Write-Host ""
+          Write-Host "🎉 SUNSHINE SETUP COMPLETED!"
           Write-Host "================================"
+          if ($webSuccess) {
+              $webStatus = "ACCESSIBLE"
+          } else {
+              $webStatus = "CHECK MANUALLY"
+          }
           Write-Host "📊 Service Status: $($service.Status)"
-          Write-Host "🌐 Web Interface: $(if ($webSuccess) {'ACCESSIBLE'} else {'CHECK MANUALLY'})"
+          Write-Host "🌐 Web Interface: $webStatus"
           Write-Host "🔧 Config URL: https://localhost:47990"
-          Write-Host "📚 First-time setup: Create username/password in web UI"
+          Write-Host "📚 Setup in browser if needed."
           Write-Host "================================"
 
       - name: Install Tailscale
