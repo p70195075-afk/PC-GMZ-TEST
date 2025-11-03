@@ -15,16 +15,10 @@ jobs:
           Write-Host "=== Enabling Remote Desktop for PC-V1 and disabling NLA ==="
           try {
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-              
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-              
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-              
-              Write-Host "Configuring Firewall..."
               netsh advfirewall firewall delete rule name="PC-V1-Tailscale" | Out-Null
               netsh advfirewall firewall add rule name="PC-V1-Tailscale" dir=in action=allow protocol=TCP localport=3389
-
-              Write-Host "Restarting TermService..."
               Restart-Service -Name TermService -Force
               Write-Host "PC-V1 Remote Desktop configuration completed successfully."
           }
@@ -33,31 +27,23 @@ jobs:
               exit 1
           }
 
-          Write-Host "Applying Performance and Network Tweaks..."
-
           powercfg /change standby-timeout-ac 0
           powercfg /change monitor-timeout-ac 0
           powercfg /hibernate off
-
           bcdedit /set useplatformclock true
           bcdedit /set tscsyncpolicy Enhanced
           bcdedit /set disabledynamictick yes
-
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel" /v GlobalTimerResolutionRequests /t REG_DWORD /d 1 /f
-
           netsh int tcp set global autotuninglevel=normal
           netsh int tcp set global chimney=enabled
           netsh int tcp set global ecncapability=enabled
           netsh int tcp set global dca=enabled
           netsh int tcp set global netdma=enabled
           netsh int tcp set global rss=enabled
-
           netsh int tcp set global pacingprofile=off
           netsh int tcp set global initialRto=300
           netsh int tcp set global rsc=enabled
-
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f
-
           Write-Host "System optimization applied successfully."
 
       - name: Create PC-V1 User with Secure Password
@@ -80,7 +66,7 @@ jobs:
           New-LocalUser -Name "PC-V1" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "PC-V1"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PC-V1"
-          echo "PCV1_CREDS=User: PC-V1 | Password: $password" >> $env:GITHUB_ENV
+          echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
 
           if (-not (Get-LocalUser -Name "PC-V1")) {
               Write-Error "User creation failed"
@@ -129,8 +115,9 @@ jobs:
         run: |
           Write-Host "`n=== PC-V1 ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "$env:PCV1_CREDS"
-          Write-Host "=====================`n"
+          Write-Host "Username: PC-V1"
+          Write-Host "Password: $env:PCV1_PASSWORD"
+          Write-Host "==================`n"
           while ($true) {
               Write-Host "[$(Get-Date)] PC-V1 Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
