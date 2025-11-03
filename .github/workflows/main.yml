@@ -35,10 +35,9 @@ jobs:
           bcdedit /set disabledynamictick yes
 
           reg add "HKLM\SOFTWARE\Microsoft\DirectX" /v MaxFrameLatency /t REG_DWORD /d 1 /f
-
           Write-Host "✅ System optimizations applied!"
 
-      - name: Create PC-V1 User with Secure Password (Fixed)
+      - name: Create PC-V1 User with Secure Password
         shell: powershell
         run: |
           Write-Host "👤 Creating PC-V1 user account..."
@@ -93,16 +92,38 @@ jobs:
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           Write-Host "✅ Connected to Tailscale - IP: $tsIP"
 
-      - name: Install Sunshine
+      - name: Install Sunshine (Auto-Fix)
         shell: powershell
         run: |
-          Write-Host "🌞 Installing Sunshine..."
-          $url = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
-          $file = "$env:TEMP\Sunshine.exe"
-          Invoke-WebRequest -Uri $url -OutFile $file
-          Start-Process $file -ArgumentList "--silent" -Wait
-          Remove-Item $file -Force
-          Write-Host "✅ Sunshine installed."
+          Write-Host "🌞 Installing Sunshine (Auto-Fix)..."
+          $ErrorActionPreference = "Stop"
+          $tempDir = "$env:TEMP\sunshine"
+          New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+
+          $msiUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-x86_64.msi"
+          $exeUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
+          $msiPath = "$tempDir\Sunshine.msi"
+          $exePath = "$tempDir\Sunshine.exe"
+
+          try {
+              Write-Host "⏬ Trying MSI installer..."
+              Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing
+              Start-Process "msiexec.exe" -ArgumentList "/i", "`"$msiPath`"", "/quiet", "/norestart" -Wait
+          } catch {
+              Write-Host "⚠️ MSI not available, using EXE fallback..."
+              Invoke-WebRequest -Uri $exeUrl -OutFile $exePath -UseBasicParsing
+              Start-Process $exePath -ArgumentList "/SILENT", "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait
+          }
+
+          Start-Sleep -Seconds 6
+          Remove-Item $tempDir -Recurse -Force
+
+          if (Test-Path "$env:ProgramFiles\Sunshine\sunshine.exe") {
+              Write-Host "✅ Sunshine installed successfully!"
+          } else {
+              Write-Host "❌ Sunshine installation failed or missing!"
+              exit 1
+          }
 
       - name: Verify Sunshine
         shell: powershell
@@ -113,7 +134,7 @@ jobs:
               if ($service.Status -ne 'Running') { Start-Service Sunshine }
               Write-Host "✅ Sunshine service is running."
           } else {
-              Write-Host "⚠️ Sunshine service not detected, but continuing."
+              Write-Host "⚠️ Sunshine service not detected, continuing."
           }
 
       - name: Show Connection Info
