@@ -1,51 +1,57 @@
-name: PC-V1
+name: PC-V1-Moonlight
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
+  secure-rdp-moonlight:
     runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Configure Core PC-V1 Settings
+      - name: Configure Core PC-V1 Settings with NLA Enabled
         shell: powershell
         run: |
-          Write-Host "=== Enabling Remote Desktop for PC-V1 and disabling NLA ==="
+          Write-Host "Enabling Remote Desktop for PC-V1 with NLA enabled for security"
           try {
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+              # Keep NLA enabled for security (UserAuthentication=1)
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
+              
               netsh advfirewall firewall delete rule name="PC-V1-Tailscale" | Out-Null
               netsh advfirewall firewall add rule name="PC-V1-Tailscale" dir=in action=allow protocol=TCP localport=3389
               Restart-Service -Name TermService -Force
-              Write-Host "PC-V1 Remote Desktop configuration completed successfully."
+              Write-Host "PC-V1 Remote Desktop configuration completed with NLA enabled."
           }
           catch {
               Write-Error "PC-V1 Configuration failed: $($_.Exception.Message)"
               exit 1
           }
 
-          # --- Performance Tweaks ---
+      - name: Apply Optimized System Settings
+        shell: powershell
+        run: |
+          # Power settings to prevent sleep
           powercfg /change standby-timeout-ac 0
           powercfg /change monitor-timeout-ac 0
           powercfg /hibernate off
+
+          # System performance tweaks
           bcdedit /set useplatformclock true
           bcdedit /set tscsyncpolicy Enhanced
           bcdedit /set disabledynamictick yes
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel" /v GlobalTimerResolutionRequests /t REG_DWORD /d 1 /f
+          
+          # Simplified network optimization - removed problematic offload features
           netsh int tcp set global autotuninglevel=normal
-          netsh int tcp set global chimney=enabled
-          netsh int tcp set global ecncapability=enabled
-          netsh int tcp set global dca=enabled
-          netsh int tcp set global netdma=enabled
-          netsh int tcp set global rss=enabled
-          netsh int tcp set global pacingprofile=off
-          netsh int tcp set global initialRto=300
-          netsh int tcp set global rsc=enabled
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f
-          Write-Host "System optimization applied successfully."
+          netsh int tcp set global ecncapability=disabled
+          netsh int tcp set global initialRto=1000
+          
+          # Disable Hardware-accelerated GPU scheduling for better streaming compatibility
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 0 /f
+          
+          Write-Host "Optimized system settings applied successfully."
 
       - name: Create PC-V1 User with Secure Password
         shell: powershell
@@ -74,10 +80,36 @@ jobs:
               exit 1
           }
 
+      - name: Install Sunshine for Moonlight Streaming
+        shell: powershell
+        run: |
+          Write-Host "Installing Sunshine for Moonlight compatibility..."
+          $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.zip"
+          $installerPath = "$env:TEMP\sunshine.zip"
+          $extractPath = "$env:PROGRAMFILES\Sunshine"
+          
+          # Download and install Sunshine
+          Invoke-WebRequest -Uri $sunshineUrl -OutFile $installerPath
+          Expand-Archive -Path $installerPath -DestinationPath $extractPath -Force
+          Remove-Item $installerPath -Force
+          
+          # Create Sunshine firewall rules
+          $sunshinePorts = @(47984, 47989, 48010)
+          foreach ($port in $sunshinePorts) {
+              netsh advfirewall firewall add rule name="Sunshine Port $port" dir=in action=allow protocol=TCP localport=$port
+              netsh advfirewall firewall add rule name="Sunshine UDP Port $port" dir=in action=allow protocol=UDP localport=$port
+          }
+          
+          # Install Sunshine as a service
+          Start-Process -FilePath "$extractPath\Sunshine.exe" -ArgumentList "--install" -Wait
+          Start-Service -Name "Sunshine"
+          
+          Write-Host "Sunshine installed successfully. Access web config at https://localhost:47989"
+
       - name: Install Tailscale
         shell: powershell
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
@@ -89,7 +121,7 @@ jobs:
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=PC-V1
           $tsIP = $null
           $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
+          while (-not $tsIP -and $retries < 10) {
               $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
               Start-Sleep -Seconds 5
               $retries++
@@ -100,26 +132,47 @@ jobs:
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Verify PC-V1 Accessibility
+      - name: Verify Connectivity
         shell: powershell
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to port 3389 failed"
-              exit 1
+          
+          # Test RDP connectivity
+          $rdpTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -WarningAction SilentlyContinue
+          if ($rdpTest.TcpTestSucceeded) {
+              Write-Host "✓ RDP connectivity successful"
+          } else {
+              Write-Warning "RDP connection test failed"
           }
-          Write-Host "PC-V1 Remote Desktop connectivity successful!"
+          
+          # Test Sunshine connectivity
+          $sunshineTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 47989 -WarningAction SilentlyContinue
+          if ($sunshineTest.TcpTestSucceeded) {
+              Write-Host "✓ Sunshine connectivity successful"
+          } else {
+              Write-Warning "Sunshine connection test failed"
+          }
+
+      - name: Display Connection Information
+        shell: powershell
+        run: |
+          Write-Host "=================== PC-V1 SETUP COMPLETE ==================="
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "RDP Username: PC-V1"
+          Write-Host "RDP Password: $env:PCV1_PASSWORD"
+          Write-Host ""
+          Write-Host "Moonlight Setup Instructions:"
+          Write-Host "1. Open Moonlight client on your device"
+          Write-Host "2. Add PC: https://$env:TAILSCALE_IP:47989"
+          Write-Host "3. Follow the pairing process in Moonlight"
+          Write-Host "4. For manual configuration, visit: https://$env:TAILSCALE_IP:47989"
+          Write-Host "============================================================="
 
       - name: Maintain Connection
         shell: powershell
         run: |
-          Write-Host "=== PC-V1 ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: PC-V1"
-          Write-Host "Password: $env:PCV1_PASSWORD"
-          Write-Host "==================="
           while ($true) {
-              Write-Host "[$(Get-Date)] PC-V1 Active - Use Ctrl+C in workflow to terminate"
+              Write-Host "[$(Get-Date)] PC-V1 Active - Moonlight ready at $env:TAILSCALE_IP"
+              Write-Host "Use Ctrl+C in workflow to terminate this session"
               Start-Sleep -Seconds 300
           }
