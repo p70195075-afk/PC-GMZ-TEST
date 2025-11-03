@@ -21,274 +21,120 @@ jobs:
         shell: powershell
         run: |
           Write-Host "🚀 Applying latency & performance tweaks..."
-          # Anti jitter ping
           netsh int tcp set global autotuninglevel=highlyrestricted
           netsh int tcp set global rss=enabled
           netsh int tcp set global chimney=enabled
           netsh int tcp set global dca=enabled
           netsh int tcp set supplemental template=internet congestionprovider=bbr2
           
-          # Packet pacing + VSYNC-less
           reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TcpAckFrequency /t REG_DWORD /d 1 /f
           reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TCPNoDelay /t REG_DWORD /d 1 /f
 
-          # High precision timers
           bcdedit /set useplatformclock true
           bcdedit /set tscsyncpolicy Enhanced
           bcdedit /set disabledynamictick yes
 
-          # GPU queue shaving
           reg add "HKLM\SOFTWARE\Microsoft\DirectX" /v MaxFrameLatency /t REG_DWORD /d 1 /f
 
           Write-Host "✅ System optimizations applied!"
 
-      - name: Check Current User Context
+      - name: Create PC-V1 User with Secure Password (Fixed)
         shell: powershell
         run: |
-          Write-Host "🔍 Checking execution context..."
-          whoami
-          Write-Host "Is Admin: $(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
-          Get-LocalUser | Format-Table Name, Enabled
+          Write-Host "👤 Creating PC-V1 user account..."
+          Add-Type -AssemblyName System.Web
+          do {
+              $password = [System.Web.Security.Membership]::GeneratePassword(16, 4)
+          } while ($password -notmatch '[A-Z]' -or $password -notmatch '[a-z]' -or $password -notmatch '[0-9]' -or $password -notmatch '[^a-zA-Z0-9]')
+          
+          $existingUser = Get-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
+          if ($existingUser) {
+              Remove-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 2
+          }
 
-      - name: Create PC-V1 User (SIMPLIFIED - FIXED)
-        shell: powershell
-        run: |
-          Write-Host "👤 Creating PC-V1 user (Simplified Approach)..."
-          
-          # Generate simple but secure password
-          $chars = @()
-          $chars += [char[]](65..90)   # A-Z
-          $chars += [char[]](97..122)  # a-z  
-          $chars += [char[]](48..57)   # 0-9
-          $chars += @('!','@','#','$','%')
-          
-          $password = -join (1..12 | ForEach-Object { $chars | Get-Random })
-          
-          Write-Host "Generated password meets complexity requirements"
-          
-          # Delete user if exists (with force)
-          try {
-              $user = Get-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
-              if ($user) {
-                  Write-Host "🔄 Removing existing PC-V1 user..."
-                  Remove-LocalUser -Name "PC-V1" -ErrorAction Stop
-                  Start-Sleep -Seconds 2
-              }
-          } catch {
-              Write-Host "⚠️ Could not remove existing user: $($_.Exception.Message)"
-          }
-          
-          # CREATE USER - Using the most basic reliable method
-          try {
-              Write-Host "Creating new user..."
-              New-LocalUser -Name "PC-V1" -Password (ConvertTo-SecureString $password -AsPlainText -Force) -AccountNeverExpires -ErrorAction Stop
-              Write-Host "✅ User created successfully"
-          } catch {
-              Write-Host "❌ Method 1 failed: $($_.Exception.Message)"
-              Write-Host "Trying alternative method..."
-              
-              # Alternative method using .NET
-              try {
-                  Add-Type -AssemblyName System.DirectoryServices.AccountManagement
-                  $ctx = New-Object System.DirectoryServices.AccountManagement.PrincipalContext([System.DirectoryServices.AccountManagement.ContextType]::Machine)
-                  $user = New-Object System.DirectoryServices.AccountManagement.UserPrincipal($ctx)
-                  $user.Name = "PC-V1"
-                  $user.SetPassword($password)
-                  $user.Enabled = $true
-                  $user.Save()
-                  Write-Host "✅ User created via .NET method"
-              } catch {
-                  Write-Host "❌ .NET method failed: $($_.Exception.Message)"
-                  
-                  # Last resort - try command line
-                  try {
-                      net user PC-V1 $password /add /Y
-                      Write-Host "✅ User created via command line"
-                  } catch {
-                      Write-Error "ALL USER CREATION METHODS FAILED"
-                      Write-Host "FINAL ERROR: $($_.Exception.Message)"
-                      exit 1
-                  }
-              }
-          }
-          
-          # ADD TO GROUPS (with error handling)
-          try {
-              Add-LocalGroupMember -Group "Administrators" -Member "PC-V1" -ErrorAction Stop
-              Write-Host "✅ Added to Administrators group"
-          } catch {
-              Write-Host "⚠️ Could not add to Administrators: $($_.Exception.Message)"
-          }
-          
-          try {
-              Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PC-V1" -ErrorAction Stop  
-              Write-Host "✅ Added to Remote Desktop Users group"
-          } catch {
-              Write-Host "⚠️ Could not add to RDP Users: $($_.Exception.Message)"
-          }
-          
-          # VERIFY USER WAS CREATED
-          $finalCheck = Get-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
-          if ($finalCheck) {
-              Write-Host "🎉 SUCCESS: PC-V1 user verified and ready"
-              echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
-              Write-Host "Password has been set to environment variable"
-          } else {
-              Write-Error "❌ CRITICAL: User creation failed completely"
-              exit 1
-          }
+          $securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
+          New-LocalUser -Name "PC-V1" -Password $securePassword -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "PC-V1"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PC-V1"
+          echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
+
+          Write-Host "=== PC-V1 ACCESS ==="
+          Write-Host "Username: PC-V1"
+          Write-Host "Password: $password"
+          Write-Host "===================="
 
       - name: Enable Remote Desktop
         shell: powershell
         run: |
-          Write-Host "🔧 Enabling Remote Desktop..."
-          try {
-              # Enable RDP
-              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-              
-              # Enable NLA
-              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
-              
-              # Configure firewall
-              netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
-              
-              # Restart service
-              Restart-Service -Name "TermService" -Force
-              
-              Write-Host "✅ Remote Desktop enabled"
-          } catch {
-              Write-Error "❌ RDP setup failed: $($_.Exception.Message)"
-              exit 1
-          }
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+          netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name "TermService" -Force
+          Write-Host "✅ Remote Desktop enabled."
 
       - name: Install Tailscale
         shell: powershell
         run: |
           Write-Host "🌐 Installing Tailscale..."
-          try {
-              $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
-              $installerPath = "$env:TEMP\tailscale.msi"
-              Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-              Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-              Remove-Item $installerPath -Force
-              Write-Host "✅ Tailscale installed"
-          } catch {
-              Write-Error "❌ Tailscale install failed: $($_.Exception.Message)"
-              exit 1
-          }
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $file = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $url -OutFile $file
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$file`"", "/quiet", "/norestart" -Wait
+          Remove-Item $file -Force
+          Write-Host "✅ Tailscale installed successfully."
 
-      - name: Connect Tailscale
+      - name: Connect to Tailscale
         shell: powershell
         run: |
-          Write-Host "🔗 Connecting Tailscale..."
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=PC-V1 --accept-routes --accept-dns=false
-          
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              if (-not $tsIP) {
-                  $retries++
-                  Start-Sleep -Seconds 5
-              }
-          }
-          
-          if (-not $tsIP) {
-              Write-Error "❌ No Tailscale IP"
-              exit 1
-          }
-          
+          $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4)
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-          Write-Host "✅ Tailscale IP: $tsIP"
+          Write-Host "✅ Connected to Tailscale - IP: $tsIP"
 
       - name: Install Sunshine
         shell: powershell
         run: |
           Write-Host "🌞 Installing Sunshine..."
-          try {
-              $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
-              $installerPath = "$env:TEMP\Sunshine.exe"
-              Invoke-WebRequest $sunshineUrl -OutFile $installerPath
-              Start-Process $installerPath -ArgumentList "--silent" -Wait
-              Remove-Item $installerPath -Force
-              
-              # Wait for install
-              Start-Sleep -Seconds 10
-              
-              # Open ports
-              $ports = @(47984, 47989, 47990, 48010)
-              foreach ($port in $ports) {
-                  netsh advfirewall firewall add rule name="Sunshine-$port" dir=in action=allow protocol=TCP localport=$port
-              }
-              
-              Write-Host "✅ Sunshine installed"
-          } catch {
-              Write-Error "❌ Sunshine install failed: $($_.Exception.Message)"
-              exit 1
-          }
+          $url = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
+          $file = "$env:TEMP\Sunshine.exe"
+          Invoke-WebRequest -Uri $url -OutFile $file
+          Start-Process $file -ArgumentList "--silent" -Wait
+          Remove-Item $file -Force
+          Write-Host "✅ Sunshine installed."
 
-      - name: Start and Verify Sunshine
+      - name: Verify Sunshine
         shell: powershell
         run: |
-          Write-Host "🔍 Starting Sunshine service..."
-          Start-Service -Name "Sunshine" -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 10
-          
+          Start-Sleep -Seconds 8
           $service = Get-Service -Name "Sunshine" -ErrorAction SilentlyContinue
-          if ($service -and $service.Status -eq 'Running') {
-              Write-Host "✅ Sunshine service running"
+          if ($service) {
+              if ($service.Status -ne 'Running') { Start-Service Sunshine }
+              Write-Host "✅ Sunshine service is running."
           } else {
-              Write-Host "⚠️ Sunshine service not running, but continuing..."
-          }
-          
-          # Test web interface
-          try {
-              Invoke-WebRequest -Uri "https://localhost:47990" -UseBasicParsing -SkipCertificateCheck -TimeoutSec 10
-              Write-Host "✅ Sunshine web UI accessible"
-          } catch {
-              Write-Host "⚠️ Sunshine web UI not ready yet"
+              Write-Host "⚠️ Sunshine service not detected, but continuing."
           }
 
-      - name: Verify Connections
-        shell: powershell
-        run: |
-          Write-Host "📡 Testing connections to Tailscale IP: $env:TAILSCALE_IP"
-          
-          # Test RDP
-          $rdpTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -WarningAction SilentlyContinue
-          if ($rdpTest.TcpTestSucceeded) {
-              Write-Host "✅ RDP: Connected"
-          } else {
-              Write-Host "❌ RDP: Failed"
-          }
-          
-          # Test Sunshine
-          $sunshineTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 47990 -WarningAction SilentlyContinue
-          if ($sunshineTest.TcpTestSucceeded) {
-              Write-Host "✅ Sunshine: Connected" 
-          } else {
-              Write-Host "❌ Sunshine: Failed"
-          }
-
-      - name: Show Login Info
+      - name: Show Connection Info
         shell: powershell
         run: |
           Write-Host ""
-          Write-Host "🎉 PC-V1 SETUP COMPLETE!"
-          Write-Host "========================"
-          Write-Host "🌐 Tailscale IP: $env:TAILSCALE_IP"
-          Write-Host "👤 Username: PC-V1" 
-          Write-Host "🔑 Password: $env:PCV1_PASSWORD"
+          Write-Host "=================== PC-V1 SETUP COMPLETE ==================="
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "RDP Username: PC-V1"
+          Write-Host "RDP Password: $env:PCV1_PASSWORD"
           Write-Host ""
-          Write-Host "🔗 RDP: $env:TAILSCALE_IP"
-          Write-Host "🎮 Moonlight: https://$env:TAILSCALE_IP:47990"
-          Write-Host "========================"
+          Write-Host "Remote Desktop:"
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: PC-V1"
+          Write-Host "Password: $env:PCV1_PASSWORD"
+          Write-Host "============================================================="
 
       - name: Keep Alive
         shell: powershell
         run: |
-          Write-Host "🔄 Keeping session alive..."
           while ($true) {
-              Write-Host "[$(Get-Date)] PC-V1 Active - $env:TAILSCALE_IP"
+              Write-Host "[$(Get-Date)] PC-V1 Active - RDP: $env:TAILSCALE_IP"
               Start-Sleep -Seconds 300
           }
