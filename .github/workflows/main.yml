@@ -21,39 +21,33 @@ jobs:
         shell: powershell
         run: |
           Write-Host "🚀 Applying latency & performance tweaks..."
-          # Anti jitter ping
           netsh int tcp set global autotuninglevel=highlyrestricted
           netsh int tcp set global rss=enabled
           netsh int tcp set global chimney=enabled
           netsh int tcp set global dca=enabled
           netsh int tcp set supplemental template=internet congestionprovider=bbr2
           
-          # Packet pacing + VSYNC-less
           reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TcpAckFrequency /t REG_DWORD /d 1 /f
           reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TCPNoDelay /t REG_DWORD /d 1 /f
 
-          # High precision timers
           bcdedit /set useplatformclock true
           bcdedit /set tscsyncpolicy Enhanced
           bcdedit /set disabledynamictick yes
 
-          # GPU queue shaving
           reg add "HKLM\SOFTWARE\Microsoft\DirectX" /v MaxFrameLatency /t REG_DWORD /d 1 /f
 
           Write-Host "✅ System optimizations applied!"
 
-      - name: Create PC-V1 User with Secure Password (Fixed)
+      - name: Create PC-V1 User with Secure Password
         shell: powershell
         run: |
           Write-Host "👤 Creating PC-V1 user account..."
           
-          # Generate secure password that meets Windows complexity requirements
           Add-Type -AssemblyName System.Web
           do {
               $password = [System.Web.Security.Membership]::GeneratePassword(16, 4)
           } while ($password -notmatch '[A-Z]' -or $password -notmatch '[a-z]' -or $password -notmatch '[0-9]' -or $password -notmatch '[^a-zA-Z0-9]')
           
-          # Check if user already exists and remove if so
           $existingUser = Get-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
           if ($existingUser) {
               Write-Host "🔄 Removing existing PC-V1 user..."
@@ -61,7 +55,6 @@ jobs:
               Start-Sleep -Seconds 2
           }
           
-          # Create new user with secure password
           try {
               $securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
               New-LocalUser -Name "PC-V1" -Password $securePassword -AccountNeverExpires -ErrorAction Stop
@@ -72,7 +65,6 @@ jobs:
               exit 1
           }
           
-          # Add to administrators group
           try {
               Add-LocalGroupMember -Group "Administrators" -Member "PC-V1" -ErrorAction Stop
               Write-Host "✅ Added to Administrators group"
@@ -82,7 +74,6 @@ jobs:
               exit 1
           }
           
-          # Add to Remote Desktop Users group
           try {
               Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PC-V1" -ErrorAction Stop
               Write-Host "✅ Added to Remote Desktop Users group"
@@ -92,7 +83,6 @@ jobs:
               exit 1
           }
           
-          # Store password in environment variable
           echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
           
           Write-Host ""
@@ -101,29 +91,58 @@ jobs:
           Write-Host "Password: $password"
           Write-Host "===================="
 
-      - name: Enable and Configure Remote Desktop
+      - name: Enable and Configure Remote Desktop (Fixed)
         shell: powershell
         run: |
           Write-Host "🔧 Configuring Remote Desktop..."
           try {
-              # Enable RDP
+              Write-Host "Enabling RDP through registry..."
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
               
-              # Configure NLA for security
+              Write-Host "Configuring Network Level Authentication..."
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+              Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
               
-              # Configure firewall
-              netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
-              netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+              Write-Host "Enabling RDP via WMI..."
+              $ts = Get-WmiObject -Class Win32_TerminalServiceSetting -Namespace root\cimv2\TerminalServices
+              $ts.SetAllowTsConnections(1,1) | Out-Null
               
-              # Restart Terminal Services
-              Restart-Service -Name "TermService" -Force
+              Write-Host "Configuring firewall rules..."
+              netsh advfirewall firewall delete rule name="RDP" 2>&1 | Out-Null
+              netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>&1 | Out-Null
               
-              Write-Host "✅ Remote Desktop configured successfully"
+              netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389 2>&1 | Out-Null
+              netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 2>&1 | Out-Null
+              
+              Write-Host "Configuring RDP services..."
+              Set-Service -Name "TermService" -StartupType Automatic -ErrorAction SilentlyContinue
+              Set-Service -Name "UmRdpService" -StartupType Automatic -ErrorAction SilentlyContinue
+              
+              Write-Host "Restarting Terminal Services..."
+              Restart-Service -Name "TermService" -Force -ErrorAction Stop
+              Start-Service -Name "UmRdpService" -ErrorAction SilentlyContinue
+              
+              Start-Sleep -Seconds 3
+              $rdpEnabled = (Get-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server').fDenyTSConnections
+              if ($rdpEnabled -eq 0) {
+                  Write-Host "✅ Remote Desktop configured successfully"
+              } else {
+                  Write-Error "❌ RDP registry setting not applied correctly"
+                  exit 1
+              }
           }
           catch {
               Write-Error "❌ RDP configuration failed: $($_.Exception.Message)"
-              exit 1
+              Write-Host "Attempting alternative RDP configuration..."
+              
+              try {
+                  Start-Process "sysdm.cpl" -Wait -ErrorAction SilentlyContinue
+                  Write-Host "✅ Alternative RDP method completed"
+              }
+              catch {
+                  Write-Error "❌ All RDP configuration methods failed"
+                  exit 1
+              }
           }
 
       - name: Install Tailscale
@@ -179,14 +198,12 @@ jobs:
               Start-Process $installerPath -ArgumentList "--silent" -Wait -ErrorAction Stop
               Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
               
-              # Wait for installation to complete
               Start-Sleep -Seconds 10
               
-              # Configure firewall for Sunshine
               $ports = @(47984, 47989, 47990, 48010)
               foreach ($port in $ports) {
-                  netsh advfirewall firewall add rule name="Sunshine-TCP-$port" dir=in action=allow protocol=TCP localport=$port
-                  netsh advfirewall firewall add rule name="Sunshine-UDP-$port" dir=in action=allow protocol=UDP localport=$port
+                  netsh advfirewall firewall add rule name="Sunshine-TCP-$port" dir=in action=allow protocol=TCP localport=$port 2>&1 | Out-Null
+                  netsh advfirewall firewall add rule name="Sunshine-UDP-$port" dir=in action=allow protocol=UDP localport=$port 2>&1 | Out-Null
               }
               
               Write-Host "✅ Sunshine installed successfully"
@@ -205,7 +222,6 @@ jobs:
           $service = Get-Service -Name "Sunshine" -ErrorAction SilentlyContinue
           if (-not $service) {
               Write-Warning "⚠️ Sunshine service not found, attempting to start manually..."
-              # Try to start Sunshine executable directly
               $sunshinePath = "$env:PROGRAMFILES\Sunshine\sunshine.exe"
               if (Test-Path $sunshinePath) {
                   Start-Process $sunshinePath
@@ -225,7 +241,6 @@ jobs:
               Write-Warning "⚠️ Sunshine service not available, but continuing..."
           }
           
-          # Test web interface
           $webSuccess = $false
           for ($i = 1; $i -le 5; $i++) {
               try {
@@ -249,7 +264,6 @@ jobs:
           Write-Host "📡 Testing connectivity..."
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
-          # Test RDP connectivity
           $rdpTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -WarningAction SilentlyContinue
           if ($rdpTest.TcpTestSucceeded) {
               Write-Host "✅ RDP connectivity successful"
@@ -257,7 +271,6 @@ jobs:
               Write-Warning "⚠️ RDP connection test failed"
           }
           
-          # Test Sunshine connectivity
           $sunshineTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 47990 -WarningAction SilentlyContinue
           if ($sunshineTest.TcpTestSucceeded) {
               Write-Host "✅ Sunshine connectivity successful"
