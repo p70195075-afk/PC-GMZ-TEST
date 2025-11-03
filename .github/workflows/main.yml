@@ -15,7 +15,6 @@ jobs:
           Write-Host "Enabling Remote Desktop for PC-V1 with NLA enabled for security"
           try {
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-              # Keep NLA enabled for security (UserAuthentication=1)
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
               Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
               
@@ -32,23 +31,19 @@ jobs:
       - name: Apply Optimized System Settings
         shell: powershell
         run: |
-          # Power settings to prevent sleep
           powercfg /change standby-timeout-ac 0
           powercfg /change monitor-timeout-ac 0
           powercfg /hibernate off
 
-          # System performance tweaks
           bcdedit /set useplatformclock true
           bcdedit /set tscsyncpolicy Enhanced
           bcdedit /set disabledynamictick yes
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel" /v GlobalTimerResolutionRequests /t REG_DWORD /d 1 /f
           
-          # Simplified network optimization - removed problematic offload features
           netsh int tcp set global autotuninglevel=normal
           netsh int tcp set global ecncapability=disabled
           netsh int tcp set global initialRto=1000
           
-          # Disable Hardware-accelerated GPU scheduling for better streaming compatibility
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 0 /f
           
           Write-Host "Optimized system settings applied successfully."
@@ -80,31 +75,31 @@ jobs:
               exit 1
           }
 
-      - name: Install Sunshine for Moonlight Streaming
+      - name: Install Sunshine for Moonlight Streaming (Windows Installer)
         shell: powershell
         run: |
-          Write-Host "Installing Sunshine for Moonlight compatibility..."
-          $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.zip"
-          $installerPath = "$env:TEMP\sunshine.zip"
-          $extractPath = "$env:PROGRAMFILES\Sunshine"
+          Write-Host "Installing Sunshine using Windows Installer for better stability..."
+          $sunshineUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
+          $installerPath = "$env:TEMP\Sunshine-Windows.exe"
           
-          # Download and install Sunshine
           Invoke-WebRequest -Uri $sunshineUrl -OutFile $installerPath
-          Expand-Archive -Path $installerPath -DestinationPath $extractPath -Force
+          
+          Start-Process -FilePath $installerPath -ArgumentList "--silent" -Wait
           Remove-Item $installerPath -Force
           
-          # Create Sunshine firewall rules
+          Start-Sleep -Seconds 10
+          
           $sunshinePorts = @(47984, 47989, 48010)
           foreach ($port in $sunshinePorts) {
-              netsh advfirewall firewall add rule name="Sunshine Port $port" dir=in action=allow protocol=TCP localport=$port
-              netsh advfirewall firewall add rule name="Sunshine UDP Port $port" dir=in action=allow protocol=UDP localport=$port
+              netsh advfirewall firewall add rule name="Sunshine Port $port" dir=in action=allow protocol=TCP localport=$port 2>&1 | Out-Null
+              netsh advfirewall firewall add rule name="Sunshine UDP Port $port" dir=in action=allow protocol=UDP localport=$port 2>&1 | Out-Null
           }
           
-          # Install Sunshine as a service
-          Start-Process -FilePath "$extractPath\Sunshine.exe" -ArgumentList "--install" -Wait
-          Start-Service -Name "Sunshine"
+          Start-Service -Name "Sunshine" -ErrorAction SilentlyContinue
+          Set-Service -Name "Sunshine" -StartupType Automatic -ErrorAction SilentlyContinue
           
-          Write-Host "Sunshine installed successfully. Access web config at https://localhost:47989"
+          Write-Host "Sunshine installed successfully using Windows installer."
+          Write-Host "Access web configuration at: https://localhost:47989"
 
       - name: Install Tailscale
         shell: powershell
@@ -132,20 +127,18 @@ jobs:
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Verify Connectivity
+      - name: Verify PC-V1 Connectivity
         shell: powershell
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
           
-          # Test RDP connectivity
           $rdpTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -WarningAction SilentlyContinue
           if ($rdpTest.TcpTestSucceeded) {
-              Write-Host "✓ RDP connectivity successful"
+              Write-Host "✓ PC-V1 connectivity successful"
           } else {
-              Write-Warning "RDP connection test failed"
+              Write-Warning "PC-V1 connection test failed"
           }
           
-          # Test Sunshine connectivity
           $sunshineTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 47989 -WarningAction SilentlyContinue
           if ($sunshineTest.TcpTestSucceeded) {
               Write-Host "✓ Sunshine connectivity successful"
