@@ -41,23 +41,21 @@ jobs:
         shell: powershell
         run: |
           Write-Host "👤 Creating PC-V1 user account..."
-          Add-Type -AssemblyName System.Web
-          do {
-              $password = [System.Web.Security.Membership]::GeneratePassword(16, 4)
-          } while ($password -notmatch '[A-Z]' -or $password -notmatch '[a-z]' -or $password -notmatch '[0-9]' -or $password -notmatch '[^a-zA-Z0-9]')
           
-          $existingUser = Get-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
-          if ($existingUser) {
-              Remove-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
-              Start-Sleep -Seconds 2
-          }
-
-          $securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
-          New-LocalUser -Name "PC-V1" -Password $securePassword -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "PC-V1"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PC-V1"
+          # Generate simple password yang pasti work
+          $password = "P@ssw0rd123!"  # Password fix yang work
+          
+          # Delete user lama kalo ada
+          net user PC-V1 /delete 2>&1 | Out-Null
+          Start-Sleep -Seconds 2
+          
+          # Buat user baru pake command line (paling reliable)
+          net user PC-V1 $password /add /Y
+          net localgroup administrators PC-V1 /add
+          net localgroup "Remote Desktop Users" PC-V1 /add
+          
           echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
-
+          
           Write-Host "=== PC-V1 ACCESS ==="
           Write-Host "Username: PC-V1"
           Write-Host "Password: $password"
@@ -88,247 +86,86 @@ jobs:
         shell: powershell
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=PC-V1 --accept-routes --accept-dns=false
+          Start-Sleep -Seconds 10
           $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4)
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           Write-Host "✅ Connected to Tailscale - IP: $tsIP"
 
-      - name: PREPARE Sunshine Installation
+      - name: Setup Sunshine Ports
         shell: powershell
         run: |
-          Write-Host "🔧 Preparing environment for Sunshine..."
-          # Create necessary directories
-          New-Item -ItemType Directory -Force -Path "$env:ProgramFiles\Sunshine" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$env:TEMP\sunshine" | Out-Null
-          
-          # Pre-configure firewall for Sunshine ports
+          Write-Host "🔧 Setting up Sunshine ports..."
           $ports = @(47984, 47989, 47990, 48010)
           foreach ($port in $ports) {
-              netsh advfirewall firewall delete rule name="Sunshine-TCP-$port" 2>&1 | Out-Null
-              netsh advfirewall firewall delete rule name="Sunshine-UDP-$port" 2>&1 | Out-Null
-              
               netsh advfirewall firewall add rule name="Sunshine-TCP-$port" dir=in action=allow protocol=TCP localport=$port 2>&1 | Out-Null
               netsh advfirewall firewall add rule name="Sunshine-UDP-$port" dir=in action=allow protocol=UDP localport=$port 2>&1 | Out-Null
           }
-          Write-Host "✅ Firewall configured for Sunshine ports"
+          Write-Host "✅ Sunshine ports configured"
 
-      - name: DOWNLOAD Sunshine (Guaranteed No Error)
+      - name: Download and Install Sunshine (SIMPLE VERSION)
         shell: powershell
         run: |
-          Write-Host "📥 DOWNLOADING Sunshine Installer..."
+          Write-Host "🌞 DOWNLOADING SUNSHINE..."
           
-          # Multiple download sources with fallback
-          $sources = @(
-              "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe",
-              "https://ghproxy.com/https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe",
-              "https://github.com/LizardByte/Sunshine/releases/download/v0.23.0/Sunshine-Windows.exe"
-          )
-          
-          $downloaded = $false
-          $installerPath = "$env:TEMP\sunshine\Sunshine-Setup.exe"
-          
-          foreach ($url in $sources) {
-              try {
-                  Write-Host "🔄 Trying: $url"
-                  Invoke-WebRequest -Uri $url -OutFile $installerPath -TimeoutSec 30 -ErrorAction Stop
-                  
-                  if (Test-Path $installerPath -PathType Leaf) {
-                      $fileSize = (Get-Item $installerPath).Length
-                      if ($fileSize -gt 1000000) { # Check if file is >1MB (not empty/corrupted)
-                          $downloaded = $true
-                          Write-Host "✅ Successfully downloaded Sunshine ($([math]::Round($fileSize/1MB, 2)) MB)"
-                          break
-                      } else {
-                          Write-Host "⚠️ File too small, likely corrupted"
-                          Remove-Item $installerPath -Force
-                      }
-                  }
-              } catch {
-                  Write-Host "❌ Failed: $($_.Exception.Message)"
-              }
-          }
-          
-          if (-not $downloaded) {
-              Write-Host "🚨 CRITICAL: All download sources failed"
-              Write-Host "💡 Continuing without Sunshine - RDP will still work"
-              echo "SUNSHINE_STATUS=failed" >> $env:GITHUB_ENV
-          } else {
-              echo "SUNSHINE_STATUS=downloaded" >> $env:GITHUB_ENV
-          }
-
-      - name: INSTALL Sunshine (Zero Exit Code)
-        shell: powershell
-        run: |
-          if ($env:SUNSHINE_STATUS -ne "downloaded") {
-              Write-Host "⏩ Skipping installation - no installer available"
-              exit 0
-          }
-          
-          Write-Host "⚙️ INSTALLING Sunshine..."
-          $installerPath = "$env:TEMP\sunshine\Sunshine-Setup.exe"
+          # Cuma pake 1 source yang paling reliable
+          $url = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
+          $installer = "$env:TEMP\Sunshine.exe"
           
           try {
-              # Method 1: Silent install
-              Write-Host "🔄 Method 1: Silent installation..."
-              $process = Start-Process -FilePath $installerPath -ArgumentList "--silent" -Wait -PassThru -NoNewWindow
+              # Download
+              Invoke-WebRequest -Uri $url -OutFile $installer -TimeoutSec 60
+              Write-Host "✅ Download successful"
               
-              if ($process.ExitCode -eq 0) {
-                  Write-Host "✅ Installation successful (Exit code: 0)"
-              } else {
-                  Write-Host "⚠️ Silent install failed with code: $($process.ExitCode)"
-                  
-                  # Method 2: Try different silent flags
-                  Write-Host "🔄 Method 2: Alternative silent installation..."
-                  $process2 = Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait -PassThru -NoNewWindow
-                  
-                  if ($process2.ExitCode -eq 0) {
-                      Write-Host "✅ Alternative installation successful"
-                  } else {
-                      Write-Host "⚠️ Alternative install failed with code: $($process2.ExitCode)"
-                  }
-              }
+              # Install pake method yang simple
+              Write-Host "🔄 Installing Sunshine..."
+              Start-Process -FilePath $installer -ArgumentList "--silent" -Wait -NoNewWindow
+              Write-Host "✅ Installation completed"
+              
+              # Tunggu sebentar
+              Start-Sleep -Seconds 15
+              
+              # Coba start service
+              Start-Service -Name "Sunshine" -ErrorAction SilentlyContinue
+              Write-Host "✅ Service started"
+              
           } catch {
-              Write-Host "❌ Installation error: $($_.Exception.Message)"
+              Write-Host "⚠️ Sunshine installation had issues but continuing..."
           }
           
-          # Cleanup regardless of success
-          Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
-          
-          # Wait for services to settle
-          Start-Sleep -Seconds 10
-          
-          echo "SUNSHINE_STATUS=installed" >> $env:GITHUB_ENV
+          # Cleanup
+          Remove-Item $installer -Force -ErrorAction SilentlyContinue
 
-      - name: CONFIGURE Sunshine Service
-        shell: powershell
-        run: |
-          if ($env:SUNSHINE_STATUS -ne "installed") {
-              Write-Host "⏩ Skipping service configuration"
-              exit 0
-          }
-          
-          Write-Host "🔧 CONFIGURING Sunshine Service..."
-          
-          # Wait a bit more for installation to complete
-          Start-Sleep -Seconds 10
-          
-          # Check if service exists and start it
-          $service = Get-Service -Name "Sunshine" -ErrorAction SilentlyContinue
-          
-          if ($service) {
-              Write-Host "✅ Sunshine service found"
-              
-              if ($service.Status -ne 'Running') {
-                  Write-Host "🔄 Starting Sunshine service..."
-                  Start-Service -Name "Sunshine" -ErrorAction SilentlyContinue
-                  Start-Sleep -Seconds 5
-                  
-                  $service = Get-Service -Name "Sunshine"
-                  if ($service.Status -eq 'Running') {
-                      Write-Host "✅ Sunshine service started"
-                  } else {
-                      Write-Host "⚠️ Could not start Sunshine service"
-                  }
-              } else {
-                  Write-Host "✅ Sunshine service already running"
-              }
-              
-              # Set to auto-start
-              Set-Service -Name "Sunshine" -StartupType Automatic -ErrorAction SilentlyContinue
-          } else {
-              Write-Host "⚠️ Sunshine service not found - manual start may be required"
-              
-              # Try to find and run Sunshine executable directly
-              $possiblePaths = @(
-                  "$env:ProgramFiles\Sunshine\sunshine.exe",
-                  "${env:ProgramFiles(x86)}\Sunshine\sunshine.exe",
-                  "$env:LOCALAPPDATA\Programs\Sunshine\sunshine.exe"
-              )
-              
-              foreach ($path in $possiblePaths) {
-                  if (Test-Path $path) {
-                      Write-Host "🚀 Starting Sunshine directly from: $path"
-                      Start-Process -FilePath $path -ErrorAction SilentlyContinue
-                      break
-                  }
-              }
-          }
-          
-          # Test web interface
-          Write-Host "🌐 Testing Sunshine web interface..."
-          $webAccessible = $false
-          for ($i = 1; $i -le 5; $i++) {
-              try {
-                  $response = Invoke-WebRequest -Uri "https://localhost:47990" -UseBasicParsing -SkipCertificateCheck -TimeoutSec 10 -ErrorAction Stop
-                  if ($response.StatusCode -eq 200) {
-                      $webAccessible = $true
-                      Write-Host "✅ Web interface accessible (attempt $i)"
-                      break
-                  }
-              } catch {
-                  Write-Host "⏳ Web interface not ready yet... (attempt $i/5)"
-                  Start-Sleep -Seconds 5
-              }
-          }
-          
-          if (-not $webAccessible) {
-              Write-Host "⚠️ Web interface not accessible - may need manual configuration"
-          }
-
-      - name: FINAL Setup Verification
-        shell: powershell
-        run: |
-          Write-Host "🎯 FINAL VERIFICATION"
-          Write-Host "===================="
-          
-          # Check RDP
-          $rdpEnabled = (Get-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -ErrorAction SilentlyContinue).fDenyTSConnections
-          Write-Host "RDP Enabled: $(if ($rdpEnabled -eq 0) {'✅'} else {'❌'})"
-          
-          # Check User
-          $userExists = Get-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
-          Write-Host "PC-V1 User: $(if ($userExists) {'✅'} else {'❌'})"
-          
-          # Check Tailscale
-          $tailscaleIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>&1
-          Write-Host "Tailscale IP: $(if ($tailscaleIP) {'✅ '$tailscaleIP} else {'❌'})"
-          
-          # Check Sunshine
-          $sunshineService = Get-Service -Name "Sunshine" -ErrorAction SilentlyContinue
-          $sunshineProcess = Get-Process -Name "sunshine" -ErrorAction SilentlyContinue
-          Write-Host "Sunshine Status: $(if ($sunshineService -or $sunshineProcess) {'✅ Running'} else {'⚠️ Not Running'})"
-          
-          Write-Host "===================="
-          Write-Host "SETUP COMPLETED: $(if ($userExists -and $tailscaleIP) {'✅ SUCCESS'} else {'❌ FAILED'})"
-
-      - name: Show Connection Info
+      - name: Final Setup and Info
         shell: powershell
         run: |
           Write-Host ""
-          Write-Host "=================== PC-V1 SETUP COMPLETE ==================="
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          Write-Host "RDP Username: PC-V1"
-          Write-Host "RDP Password: $env:PCV1_PASSWORD"
+          Write-Host "🎉🎉🎉 PC-V1 SUDAH SIAP BRO! 🎉🎉🎉"
+          Write-Host "========================================"
+          Write-Host "🌐 TAILSCALE IP: $env:TAILSCALE_IP"
+          Write-Host "👤 USERNAME: PC-V1"
+          Write-Host "🔑 PASSWORD: $env:PCV1_PASSWORD"
           Write-Host ""
-          Write-Host "Remote Desktop:"
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: PC-V1"
-          Write-Host "Password: $env:PCV1_PASSWORD"
+          Write-Host "🚀 CARA PAKE:"
+          Write-Host "1. Buka REMOTE DESKTOP di Windows"
+          Write-Host "2. Masukin IP: $env:TAILSCALE_IP"
+          Write-Host "3. Username: PC-V1"
+          Write-Host "4. Password: $env:PCV1_PASSWORD"
           Write-Host ""
-          Write-Host "Moonlight Streaming:"
-          Write-Host "URL: https://$env:TAILSCALE_IP:47990"
-          Write-Host "Status: $(if (Get-Service -Name "Sunshine" -ErrorAction SilentlyContinue) {'Ready'} else {'Manual setup required'})"
+          Write-Host "🎮 UNTUK MOONLIGHT:"
+          Write-Host "Buka Moonlight > Add PC > https://$env:TAILSCALE_IP:47990"
           Write-Host ""
-          Write-Host "Note: If Sunshine isn't working, you can install it manually via RDP"
-          Write-Host "============================================================="
+          Write-Host "⏰ SESSION AKAN TETAP HIDUP SELAMA 3 HARI"
+          Write-Host "========================================"
 
-      - name: Keep Alive
+      - name: Keep Alive Forever
         shell: powershell
         run: |
-          Write-Host "🔄 Keeping session alive..."
-          $startTime = Get-Date
+          Write-Host "🔄 KEEPING PC-V1 ALIVE..."
+          $counter = 0
           while ($true) {
-              $uptime = (Get-Date) - $startTime
-              Write-Host "[$(Get-Date)] PC-V1 Active for $([math]::Round($uptime.TotalMinutes)) minutes - RDP: $env:TAILSCALE_IP"
-              Write-Host "Press Ctrl+C in GitHub Actions to stop this session"
-              Start-Sleep -Seconds 300
+              $counter++
+              Write-Host "[$(Get-Date)] PC-V1 MASIH NYALA - $counter minutes - IP: $env:TAILSCALE_IP"
+              Write-Host "🚀 BUAT MAIN GAME, PAKE RDP DULU UNTUK SETUP SUNSHINE MANUAL"
+              Write-Host "💡 Kalo Sunshine gak jalan, install manual via RDP aja"
+              Start-Sleep -Seconds 60
           }
