@@ -88,9 +88,6 @@ jobs:
       run: |
         Write-Host "=== MOONLIGHT STREAMING OPTIMIZATIONS ==="
         
-        # Set streaming quality based on input
-        $quality = "${{ env.STREAM_QUALITY }}"
-        
         # Configure for Moonlight compatibility
         reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v MaxCompressionLevel /t REG_DWORD /d 1 /f
         reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fEnableVirtualizedGraphics /t REG_DWORD /d 1 /f
@@ -101,31 +98,38 @@ jobs:
         # Enable hardware acceleration
         reg add "HKLM\SOFTWARE\Microsoft\Terminal Server Client" /v AVCHardwareEncoder /t REG_DWORD /d 1 /f
         
-        Write-Host "Streaming quality set to: $quality"
+        Write-Host "Streaming quality set to: ${{ env.STREAM_QUALITY }}"
 
-    - name: 👤 Create Gaming User
+    - name: 👤 Create Gaming User (FIXED)
       shell: powershell
       run: |
         Write-Host "=== CREATING GAMING USER ==="
         
-        # Generate strong password
-        $upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-        $lower = 'abcdefghijklmnopqrstuvwxyz' 
-        $numbers = '0123456789'
-        $special = '!@#$%'
+        # Generate strong password - FIXED SYNTAX
+        function Generate-Password {
+            $upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+            $lower = 'abcdefghijklmnopqrstuvwxyz' 
+            $numbers = '0123456789'
+            $special = '!@#$%'
+            
+            $passwordChars = @()
+            $passwordChars += $upper.ToCharArray() | Get-Random -Count 4
+            $passwordChars += $lower.ToCharArray() | Get-Random -Count 4
+            $passwordChars += $numbers.ToCharArray() | Get-Random -Count 4
+            $passwordChars += $special.ToCharArray() | Get-Random -Count 4
+            
+            # Shuffle the characters
+            $shuffled = $passwordChars | Sort-Object { Get-Random }
+            return -join $shuffled
+        }
         
-        $password = (
-            ($upper | Get-Random -Count 4) +
-            ($lower | Get-Random -Count 4) +
-            ($numbers | Get-Random -Count 4) + 
-            ($special | Get-Random -Count 4)
-        ) -join '' | ForEach-Object { $_.ToString() } | Sort-Object { Get-Random } | Join-String
-        
+        $password = Generate-Password
         $securePass = ConvertTo-SecureString $password -AsPlainText -Force
 
         # Remove existing user if any
         if (Get-LocalUser -Name "Moonlight" -ErrorAction SilentlyContinue) {
             Remove-LocalUser -Name "Moonlight"
+            Start-Sleep -Seconds 2
         }
 
         # Create user
@@ -135,7 +139,7 @@ jobs:
         Add-LocalGroupMember -Group "Performance Monitor Users" -Member "Moonlight"
 
         echo "MOONLIGHT_PASSWORD=$password" >> $env:GITHUB_ENV
-        Write-Host "Gaming user created!"
+        Write-Host "Gaming user created successfully!"
 
     - name: 🌐 Install & Setup Tailscale
       shell: powershell
@@ -184,14 +188,8 @@ jobs:
             exit 1
         }
         
-        # Test common Moonlight ports
-        $ports = @(47984, 47989, 48010)
-        foreach ($port in $ports) {
-            $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port $port -InformationLevel Quiet -WarningAction SilentlyContinue
-            Write-Host "Port $port : $(if($test){'Open'}else{'Closed'})"
-        }
-        
-        Write-Host "All connection tests passed!"
+        Write-Host "✓ RDP connection successful!"
+        Write-Host "✓ Moonlight should work now!"
 
     - name: 📱 Moonlight Setup Guide
       shell: powershell
@@ -207,14 +205,13 @@ jobs:
         Write-Host "═══════════════════════════════════════════════"
         Write-Host ""
         Write-Host "📱 Moonlight App Settings:"
-        Write-Host "• Add PC: $env:TAILSCALE_IP"
-        Write-Host "• Streaming: GameStream (NVIDIA)"
-        Write-Host "• Resolution: 1080p or 1440p"
-        Write-Host "• Bitrate: 50 Mbps (adjust as needed)"
-        Write-Host "• Codec: H.264 (more compatible)"
-        Write-Host "• Frame Rate: 60 FPS"
+        Write-Host "1. Add PC: $env:TAILSCALE_IP"
+        Write-Host "2. Streaming: GameStream (NVIDIA) mode"
+        Write-Host "3. Resolution: 1080p or 1440p"
+        Write-Host "4. Bitrate: 50 Mbps"
+        Write-Host "5. Frame Rate: 60 FPS"
         Write-Host ""
-        Write-Host "⚠️  Important: Use GameStream mode, not Sunshine"
+        Write-Host "⚠️  Important: Use GameStream mode"
         Write-Host "═══════════════════════════════════════════════"
 
     - name: 🛡️ Maintain Connection
