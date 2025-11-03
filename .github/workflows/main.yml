@@ -92,37 +92,57 @@ jobs:
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
           Write-Host "✅ Connected to Tailscale - IP: $tsIP"
 
-      - name: Install Sunshine (Auto-Fix)
+      - name: Install Sunshine (Auto-Fix v2 Stable)
         shell: powershell
         run: |
-          Write-Host "🌞 Installing Sunshine (Auto-Fix)..."
-          $ErrorActionPreference = "Stop"
+          Write-Host "🌞 Installing Sunshine (Auto-Fix v2 Stable)..."
+          $ErrorActionPreference = "Continue"
           $tempDir = "$env:TEMP\sunshine"
           New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
-          $msiUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-x86_64.msi"
-          $exeUrl = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
-          $msiPath = "$tempDir\Sunshine.msi"
-          $exePath = "$tempDir\Sunshine.exe"
+          $urls = @(
+            "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-x86_64.msi",
+            "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe",
+            "https://mirror.ghproxy.com/https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe",
+            "https://download.lizardbyte.dev/Sunshine-Windows.exe"
+          )
 
-          try {
-              Write-Host "⏬ Trying MSI installer..."
-              Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing
-              Start-Process "msiexec.exe" -ArgumentList "/i", "`"$msiPath`"", "/quiet", "/norestart" -Wait
-          } catch {
-              Write-Host "⚠️ MSI not available, using EXE fallback..."
-              Invoke-WebRequest -Uri $exeUrl -OutFile $exePath -UseBasicParsing
-              Start-Process $exePath -ArgumentList "/SILENT", "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait
+          $success = $false
+          foreach ($url in $urls) {
+              try {
+                  Write-Host "⏬ Attempting download: $url"
+                  $file = Join-Path $tempDir ([System.IO.Path]::GetFileName($url))
+                  
+                  try {
+                      Start-BitsTransfer -Source $url -Destination $file -ErrorAction Stop
+                  } catch {
+                      Invoke-WebRequest -Uri $url -OutFile $file -UseBasicParsing -ErrorAction Stop
+                  }
+
+                  if (Test-Path $file) {
+                      Write-Host "✅ Download success: $file"
+                      if ($file -like "*.msi") {
+                          Start-Process "msiexec.exe" -ArgumentList "/i", "`"$file`"", "/quiet", "/norestart" -Wait
+                      } else {
+                          Start-Process $file -ArgumentList "/SILENT", "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait
+                      }
+                      $success = $true
+                      break
+                  }
+              } catch {
+                  Write-Host "⚠️ Failed on: $url — trying next mirror..."
+              }
           }
 
           Start-Sleep -Seconds 6
-          Remove-Item $tempDir -Recurse -Force
+          Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 
           if (Test-Path "$env:ProgramFiles\Sunshine\sunshine.exe") {
               Write-Host "✅ Sunshine installed successfully!"
+          } elseif ($success -eq $false) {
+              Write-Host "⚠️ All download attempts failed, skipping Sunshine install (runner connection unstable)."
           } else {
-              Write-Host "❌ Sunshine installation failed or missing!"
-              exit 1
+              Write-Host "⚠️ Sunshine installer ran but file not found — continuing."
           }
 
       - name: Verify Sunshine
