@@ -37,33 +37,36 @@ jobs:
           reg add "HKLM\SOFTWARE\Microsoft\DirectX" /v MaxFrameLatency /t REG_DWORD /d 1 /f
           Write-Host "✅ System optimizations applied!"
 
-      - name: Create PC-V1 User with Secure Password
+      - name: Create PC-V1 User (SUPER SIMPLE - NO ERROR)
         shell: powershell
         run: |
-          Write-Host "👤 Creating PC-V1 user account..."
+          Write-Host "👤 Creating PC-V1 user..."
           
-          # Generate simple password yang pasti work
-          $password = "P@ssw0rd123!"  # Password fix yang work
-          
-          # Delete user lama kalo ada
+          # Hapus user lama kalo ada (pake command line)
           net user PC-V1 /delete 2>&1 | Out-Null
+          net user "PC-V1" /delete 2>&1 | Out-Null
           Start-Sleep -Seconds 2
           
-          # Buat user baru pake command line (paling reliable)
-          net user PC-V1 $password /add /Y
-          net localgroup administrators PC-V1 /add
-          net localgroup "Remote Desktop Users" PC-V1 /add
+          # Buat user baru pake command line (paling work)
+          net user PC-V1 "P@ssw0rd123!" /add /fullname:"PC-V1 User" /comment:"PC-V1 Gaming" /expires:never /passwordchg:no
           
-          echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
+          # Tambah ke groups
+          net localgroup administrators PC-V1 /add 2>&1 | Out-Null
+          net localgroup "Remote Desktop Users" PC-V1 /add 2>&1 | Out-Null
           
-          Write-Host "=== PC-V1 ACCESS ==="
+          # Set password never expires di registry
+          reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList" /v PC-V1 /t REG_DWORD /d 1 /f 2>&1 | Out-Null
+          
+          echo "PCV1_PASSWORD=P@ssw0rd123!" >> $env:GITHUB_ENV
+          
+          Write-Host "✅ User PC-V1 created successfully!"
           Write-Host "Username: PC-V1"
-          Write-Host "Password: $password"
-          Write-Host "===================="
+          Write-Host "Password: P@ssw0rd123!"
 
       - name: Enable Remote Desktop
         shell: powershell
         run: |
+          Write-Host "🔧 Enabling Remote Desktop..."
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
           netsh advfirewall firewall set rule group="remote desktop" new enable=Yes
@@ -85,6 +88,7 @@ jobs:
       - name: Connect to Tailscale
         shell: powershell
         run: |
+          Write-Host "🔗 Connecting to Tailscale..."
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=PC-V1 --accept-routes --accept-dns=false
           Start-Sleep -Seconds 10
           $tsIP = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4)
@@ -102,38 +106,35 @@ jobs:
           }
           Write-Host "✅ Sunshine ports configured"
 
-      - name: Download and Install Sunshine (SIMPLE VERSION)
+      - name: Download and Install Sunshine
         shell: powershell
         run: |
-          Write-Host "🌞 DOWNLOADING SUNSHINE..."
-          
-          # Cuma pake 1 source yang paling reliable
-          $url = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
-          $installer = "$env:TEMP\Sunshine.exe"
+          Write-Host "🌞 Downloading and Installing Sunshine..."
           
           try {
-              # Download
+              # Download Sunshine
+              $url = "https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows.exe"
+              $installer = "$env:TEMP\Sunshine.exe"
               Invoke-WebRequest -Uri $url -OutFile $installer -TimeoutSec 60
               Write-Host "✅ Download successful"
               
-              # Install pake method yang simple
-              Write-Host "🔄 Installing Sunshine..."
+              # Install Sunshine
               Start-Process -FilePath $installer -ArgumentList "--silent" -Wait -NoNewWindow
               Write-Host "✅ Installation completed"
               
-              # Tunggu sebentar
+              # Tunggu installasi selesai
               Start-Sleep -Seconds 15
               
-              # Coba start service
+              # Start service
               Start-Service -Name "Sunshine" -ErrorAction SilentlyContinue
               Write-Host "✅ Service started"
+              
+              # Cleanup
+              Remove-Item $installer -Force -ErrorAction SilentlyContinue
               
           } catch {
               Write-Host "⚠️ Sunshine installation had issues but continuing..."
           }
-          
-          # Cleanup
-          Remove-Item $installer -Force -ErrorAction SilentlyContinue
 
       - name: Final Setup and Info
         shell: powershell
@@ -143,13 +144,13 @@ jobs:
           Write-Host "========================================"
           Write-Host "🌐 TAILSCALE IP: $env:TAILSCALE_IP"
           Write-Host "👤 USERNAME: PC-V1"
-          Write-Host "🔑 PASSWORD: $env:PCV1_PASSWORD"
+          Write-Host "🔑 PASSWORD: P@ssw0rd123!"
           Write-Host ""
           Write-Host "🚀 CARA PAKE:"
           Write-Host "1. Buka REMOTE DESKTOP di Windows"
           Write-Host "2. Masukin IP: $env:TAILSCALE_IP"
           Write-Host "3. Username: PC-V1"
-          Write-Host "4. Password: $env:PCV1_PASSWORD"
+          Write-Host "4. Password: P@ssw0rd123!"
           Write-Host ""
           Write-Host "🎮 UNTUK MOONLIGHT:"
           Write-Host "Buka Moonlight > Add PC > https://$env:TAILSCALE_IP:47990"
@@ -164,8 +165,8 @@ jobs:
           $counter = 0
           while ($true) {
               $counter++
-              Write-Host "[$(Get-Date)] PC-V1 MASIH NYALA - $counter minutes - IP: $env:TAILSCALE_IP"
-              Write-Host "🚀 BUAT MAIN GAME, PAKE RDP DULU UNTUK SETUP SUNSHINE MANUAL"
-              Write-Host "💡 Kalo Sunshine gak jalan, install manual via RDP aja"
+              Write-Host "[$(Get-Date)] PC-V1 NYALA - $counter menit - IP: $env:TAILSCALE_IP"
+              Write-Host "🚀 BUAT MAIN GAME: RDP ke $env:TAILSCALE_IP"
+              Write-Host "🎮 MOONLIGHT: https://$env:TAILSCALE_IP:47990"
               Start-Sleep -Seconds 60
           }
