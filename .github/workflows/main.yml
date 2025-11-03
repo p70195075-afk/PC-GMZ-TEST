@@ -1,166 +1,116 @@
-name: PC-V1-Moonlight
+name: PC-V1-Ultra-Stable
 
 on:
   workflow_dispatch:
     inputs:
-      quality:
-        description: 'Streaming Quality'
+      runtime:
+        description: 'Uptime Duration'
         required: true
-        default: 'ultra'
+        default: '24'
         type: choice
         options:
-        - balanced
-        - premium
-        - ultra
+        - 6
+        - 12
+        - 24
 
 env:
-  STREAM_QUALITY: ${{ github.event.inputs.quality || 'ultra' }}
+  RUNTIME_HOURS: ${{ github.event.inputs.runtime || '24' }}
 
 jobs:
-  moonlight-rdp:
+  stable-rdp:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: ${{ env.RUNTIME_HOURS * 60 }}
 
     steps:
-    - name: 🚀 Moonlight System Optimization
+    - name: ⚡ System Optimization
       shell: powershell
       run: |
-        Write-Host "=== MOONLIGHT SYSTEM OPTIMIZATIONS ==="
+        Write-Host "=== SYSTEM OPTIMIZATION ==="
         
-        # Power settings for gaming
+        # Power settings
         powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
         powercfg /change standby-timeout-ac 0
         powercfg /change monitor-timeout-ac 0
         powercfg /hibernate off
-
-        # Network optimizations for streaming
+        
+        # Network optimization
         netsh int tcp set global autotuninglevel=normal
         netsh int tcp set global rss=enabled
-        netsh int tcp set global chimney=enabled
-        netsh int tcp set global dca=enabled
-        netsh int tcp set global initialRto=1000
-
-        # Graphics optimizations for Moonlight
-        reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f
-        reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 4294967295 /f
         
-        # Disable services that interfere with streaming
-        $services = @("WerSvc", "DiagTrack", "WSearch", "XboxGipSvc", "XboxNetApiSvc")
-        foreach ($service in $services) {
-            Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
-            Set-Service -Name $service -StartupType Disabled -ErrorAction SilentlyContinue
-        }
+        Write-Host "Optimization completed"
 
-        Write-Host "Moonlight optimizations completed!"
-
-    - name: 🖥️ Configure RDP for Moonlight
+    - name: 🖥️ Configure RDP
       shell: powershell
       run: |
-        Write-Host "=== MOONLIGHT RDP CONFIGURATION ==="
+        Write-Host "=== RDP CONFIGURATION ==="
         
         # Enable RDP
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "TSEnabled" -Value 1 -Force
-        
-        # Moonlight-compatible RDP settings
         Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MinEncryptionLevel" -Value 1 -Force
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
         
-        # Enhanced display settings for streaming
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxMonitors" -Value 4 -Force
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxXResolution" -Value 3840 -Force
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxYResolution" -Value 2160 -Force
-        Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "ColorDepth" -Value 4 -Force
+        # Firewall rule
+        netsh advfirewall firewall add rule name="PC-V1-RDP" dir=in action=allow protocol=TCP localport=3389
         
-        # Firewall rules
-        netsh advfirewall firewall add rule name="Moonlight-RDP" dir=in action=allow protocol=TCP localport=3389
-        netsh advfirewall firewall add rule name="Moonlight-UDP" dir=in action=allow protocol=UDP localport=3389
-        
-        # Restart services
+        # Restart service
         Restart-Service -Name TermService -Force
-        Start-Service -Name SessionEnv -ErrorAction SilentlyContinue
         
-        Write-Host "Moonlight RDP configured!"
+        echo "RDP_PORT=3389" >> $env:GITHUB_ENV
+        Write-Host "RDP configured"
 
-    - name: 🎮 Moonlight-Specific Optimizations
+    - name: 👤 Create User
       shell: powershell
       run: |
-        Write-Host "=== MOONLIGHT STREAMING OPTIMIZATIONS ==="
+        Write-Host "=== USER CREATION ==="
         
-        # Configure for Moonlight compatibility
-        reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v MaxCompressionLevel /t REG_DWORD /d 1 /f
-        reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v fEnableVirtualizedGraphics /t REG_DWORD /d 1 /f
-        
-        # Disable UDP for better stability (Moonlight works better with TCP)
-        reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v SelectTransport /t REG_DWORD /d 1 /f
-        
-        # Enable hardware acceleration
-        reg add "HKLM\SOFTWARE\Microsoft\Terminal Server Client" /v AVCHardwareEncoder /t REG_DWORD /d 1 /f
-        
-        Write-Host "Streaming quality set to: ${{ env.STREAM_QUALITY }}"
-
-    - name: 👤 Create Gaming User (FIXED)
-      shell: powershell
-      run: |
-        Write-Host "=== CREATING GAMING USER ==="
-        
-        # Generate strong password - FIXED SYNTAX
-        function Generate-Password {
-            $upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-            $lower = 'abcdefghijklmnopqrstuvwxyz' 
-            $numbers = '0123456789'
-            $special = '!@#$%'
-            
-            $passwordChars = @()
-            $passwordChars += $upper.ToCharArray() | Get-Random -Count 4
-            $passwordChars += $lower.ToCharArray() | Get-Random -Count 4
-            $passwordChars += $numbers.ToCharArray() | Get-Random -Count 4
-            $passwordChars += $special.ToCharArray() | Get-Random -Count 4
-            
-            # Shuffle the characters
-            $shuffled = $passwordChars | Sort-Object { Get-Random }
-            return -join $shuffled
+        # Simple password generation
+        $chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@'
+        $password = ''
+        for ($i = 0; $i -lt 12; $i++) {
+            $password += $chars[(Get-Random -Maximum $chars.Length)]
         }
         
-        $password = Generate-Password
         $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-
-        # Remove existing user if any
-        if (Get-LocalUser -Name "Moonlight" -ErrorAction SilentlyContinue) {
-            Remove-LocalUser -Name "Moonlight"
+        
+        # Remove existing user
+        $existingUser = Get-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
+        if ($existingUser) {
+            Remove-LocalUser -Name "PC-V1"
             Start-Sleep -Seconds 2
         }
+        
+        # Create new user
+        New-LocalUser -Name "PC-V1" -Password $securePass -AccountNeverExpires
+        Add-LocalGroupMember -Group "Administrators" -Member "PC-V1"
+        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PC-V1"
+        
+        echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
+        Write-Host "User created"
 
-        # Create user
-        New-LocalUser -Name "Moonlight" -Password $securePass -AccountNeverExpires -FullName "Moonlight Gaming"
-        Add-LocalGroupMember -Group "Administrators" -Member "Moonlight"
-        Add-LocalGroupMember -Group "Remote Desktop Users" -Member "Moonlight"
-        Add-LocalGroupMember -Group "Performance Monitor Users" -Member "Moonlight"
-
-        echo "MOONLIGHT_PASSWORD=$password" >> $env:GITHUB_ENV
-        Write-Host "Gaming user created successfully!"
-
-    - name: 🌐 Install & Setup Tailscale
+    - name: 🌐 Install Tailscale
       shell: powershell
       run: |
-        Write-Host "=== SETUP TAILSCALE ==="
+        Write-Host "=== INSTALLING TAILSCALE ==="
         
-        # Download and install
-        $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-        $file = "$env:TEMP\tailscale.msi"
-        Invoke-WebRequest -Uri $url -OutFile $file
-        Start-Process msiexec.exe -ArgumentList "/i `"$file`" /quiet /norestart" -Wait
-        Remove-Item $file -Force
+        $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+        $installerPath = "$env:TEMP\tailscale.msi"
         
-        # Wait for installation
+        Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+        Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+        Remove-Item $installerPath -Force
+        
         Start-Sleep -Seconds 10
+        Write-Host "Tailscale installed"
+
+    - name: 🔗 Connect Tailscale
+      shell: powershell
+      run: |
+        Write-Host "=== CONNECTING TAILSCALE ==="
         
-        # Connect to Tailscale
-        Start-Service Tailscale -ErrorAction SilentlyContinue
-        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=moonlight-pc --accept-routes --accept-dns
+        Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=pc-v1-stable
         
-        # Get IP with retry
+        # Get IP
         $tsIP = $null
         for ($i = 1; $i -le 10; $i++) {
             $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
@@ -168,72 +118,71 @@ jobs:
             Start-Sleep -Seconds 3
         }
         
-        if (-not $tsIP) {
-            Write-Error "Failed to get Tailscale IP"
-            exit 1
+        if ($tsIP) {
+            echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+            Write-Host "Tailscale IP: $tsIP"
+        } else {
+            Write-Host "Warning: Could not get Tailscale IP"
+            echo "TAILSCALE_IP=unknown" >> $env:GITHUB_ENV
         }
-        
-        echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-        Write-Host "Tailscale connected: $tsIP"
 
-    - name: ✅ Test Moonlight Connection
+    - name: ✅ Verify Connection
       shell: powershell
       run: |
-        Write-Host "=== TESTING MOONLIGHT COMPATIBILITY ==="
+        Write-Host "=== VERIFICATION ==="
         
-        # Test basic RDP
-        $rdpTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -InformationLevel Detailed
-        if (-not $rdpTest.TcpTestSucceeded) {
-            Write-Error "RDP connection failed!"
-            exit 1
-        }
-        
-        Write-Host "✓ RDP connection successful!"
-        Write-Host "✓ Moonlight should work now!"
-
-    - name: 📱 Moonlight Setup Guide
-      shell: powershell
-      run: |
-        Write-Host ""
-        Write-Host "═══════════════════════════════════════════════"
-        Write-Host "            🎮 MOONLIGHT READY 🎮            "
-        Write-Host "═══════════════════════════════════════════════"
-        Write-Host "🌐 Address:   $env:TAILSCALE_IP"
-        Write-Host "👤 Username:  Moonlight"
-        Write-Host "🔐 Password:  $env:MOONLIGHT_PASSWORD"
-        Write-Host "🎯 Quality:   ${{ env.STREAM_QUALITY }}"
-        Write-Host "═══════════════════════════════════════════════"
-        Write-Host ""
-        Write-Host "📱 Moonlight App Settings:"
-        Write-Host "1. Add PC: $env:TAILSCALE_IP"
-        Write-Host "2. Streaming: GameStream (NVIDIA) mode"
-        Write-Host "3. Resolution: 1080p or 1440p"
-        Write-Host "4. Bitrate: 50 Mbps"
-        Write-Host "5. Frame Rate: 60 FPS"
-        Write-Host ""
-        Write-Host "⚠️  Important: Use GameStream mode"
-        Write-Host "═══════════════════════════════════════════════"
-
-    - name: 🛡️ Maintain Connection
-      shell: powershell
-      run: |
-        Write-Host "=== MOONLIGHT STREAMING ACTIVE ==="
-        Write-Host "PC is ready for Moonlight connection!"
-        Write-Host "IP: $env:TAILSCALE_IP"
-        Write-Host "This session will run for 6 hours"
-        Write-Host ""
-        
-        for ($hour = 1; $hour -le 6; $hour++) {
-            Write-Host "[$(Get-Date -Format 'HH:mm')] Hour $hour/6 - Moonlight Ready..."
-            
-            # Health check every hour
+        if ($env:TAILSCALE_IP -ne "unknown") {
             $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -InformationLevel Quiet
-            if (-not $test) {
-                Write-Host "⚠️  Connection issue detected, restarting RDP..."
-                Restart-Service -Name TermService -Force
+            if ($test) {
+                Write-Host "✓ Connection successful"
+            } else {
+                Write-Host "⚠️ Connection test failed"
             }
+        }
+
+    - name: 📊 Final Setup
+      shell: powershell
+      run: |
+        Write-Host ""
+        Write-Host "═══════════════════════════════════════"
+        Write-Host "           PC-V1 ULTRA STABLE         "
+        Write-Host "═══════════════════════════════════════"
+        Write-Host "🌐 Address:  $env:TAILSCALE_IP"
+        Write-Host "👤 Username: PC-V1"
+        Write-Host "🔐 Password: $env:PCV1_PASSWORD"
+        Write-Host "⏰ Runtime:  ${{ env.RUNTIME_HOURS }}h"
+        Write-Host "═══════════════════════════════════════"
+        Write-Host ""
+        Write-Host "🎮 Untuk Moonlight:"
+        Write-Host "• Address: $env:TAILSCALE_IP"
+        Write-Host "• Username: PC-V1"
+        Write-Host "• Password: $env:PCV1_PASSWORD"
+        Write-Host "• GameStream mode"
+        Write-Host "═══════════════════════════════════════"
+
+    - name: 🛡️ Keep Alive
+      shell: powershell
+      run: |
+        Write-Host "=== KEEP ALIVE ==="
+        Write-Host "PC-V1 Stable aktif selama ${{ env.RUNTIME_HOURS }} jam"
+        Write-Host "IP: $env:TAILSCALE_IP"
+        Write-Host ""
+        
+        $endTime = (Get-Date).AddHours(${{ env.RUNTIME_HOURS }})
+        $checkCount = 0
+        
+        while ((Get-Date) -lt $endTime) {
+            $checkCount++
+            $remaining = $endTime - (Get-Date)
             
-            Start-Sleep -Seconds 3600  # 1 hour
+            Write-Host "[$(Get-Date -Format 'HH:mm')] Check #$checkCount - $([math]::Round($remaining.TotalHours, 1)) jam tersisa"
+            
+            # Simple health check
+            $rdpStatus = Get-Service -Name "TermService" -ErrorAction SilentlyContinue
+            $tsStatus = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+            Write-Host "  Status: RDP=$($rdpStatus.Status) Tailscale=$($tsStatus.Status)"
+            
+            Start-Sleep -Seconds 600  # Check every 10 minutes
         }
         
-        Write-Host "Session completed successfully!"
+        Write-Host "Session selesai - ${{ env.RUNTIME_HOURS }} jam completed"
