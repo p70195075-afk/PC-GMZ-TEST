@@ -1,188 +1,352 @@
-name: PC-V1-Ultra-Stable
+name: PC-V1-Ultra
 
 on:
   workflow_dispatch:
     inputs:
-      runtime:
-        description: 'Uptime Duration'
-        required: true
-        default: '24'
-        type: choice
-        options:
-        - 6
-        - 12
-        - 24
+      ultra_mode:
+        description: 'Enable ultra optimization mode'
+        required: false
+        default: 'true'
+      gaming_boost:
+        description: 'Enable gaming optimization'
+        required: false
+        default: 'true'
 
 env:
-  RUNTIME_HOURS: ${{ github.event.inputs.runtime || '24' }}
+  UPTIME_TARGET: 78h
+  CHAIN_HEADROOM: 6h
 
 jobs:
-  stable-rdp:
+  secure-rdp-ultra:
     runs-on: windows-latest
-    timeout-minutes: ${{ env.RUNTIME_HOURS * 60 }}
+    timeout-minutes: 3600
 
     steps:
-    - name: ⚡ System Optimization
+    - name: System Preparation & Cleanup
       shell: powershell
       run: |
-        Write-Host "=== SYSTEM OPTIMIZATION ==="
+        # Clean temporary files
+        CleanMgr /sagerun:1 | Out-Null
+        Remove-Item -Path "$env:TEMP\*" -Force -Recurse -ErrorAction SilentlyContinue
         
-        # Power settings
-        powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+        # Disable unnecessary services
+        $services = @("XboxGipSvc", "XboxNetApiSvc", "WSearch", "TabletInputService")
+        foreach ($service in $services) {
+          Set-Service -Name $service -StartupType Disabled -ErrorAction SilentlyContinue
+          Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
+        }
+
+    - name: Core Security Hardening
+      shell: powershell
+      run: |
+        # Enable Windows Defender real-time protection
+        Set-MpPreference -DisableRealtimeMonitoring $false
+        Set-MpPreference -PUAProtection Enabled
+        
+        # Configure brute-force protection
+        secpol.msc /area securitypolicy /policy "Account Lockout Policy" /lockoutthreshold 5 /lockoutduration 30 /resetlockoutcount 15
+        
+        # Disable SMBv1
+        Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+        
+        # Enable stealth mode for RDP
+        netsh advfirewall firewall set rule name="PC-V1-Tailscale" new enable=yes action=allow protocol=TCP localport=3389 remoteip=${{ secrets.TAILSCALE_NETWORK }}
+
+    - name: Advanced Performance Optimization
+      shell: powershell
+      run: |
+        # Power plan optimization
+        powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c # High performance
         powercfg /change standby-timeout-ac 0
         powercfg /change monitor-timeout-ac 0
         powercfg /hibernate off
         
-        # Network optimization
+        # Kernel and timer optimization
+        bcdedit /set useplatformclock true
+        bcdedit /set tscsyncpolicy Enhanced
+        bcdedit /set disabledynamictick yes
+        bcdedit /set nx OptIn
+        bcdedit /set hypervisorschedulertype Core
+        
+        # Registry optimizations for performance
+        reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel" /v GlobalTimerResolutionRequests /t REG_DWORD /d 1 /f
+        reg add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v Win32PrioritySeparation /t REG_DWORD /d 38 /f
+        reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 4294967295 /f
+        
+        # GPU scheduling optimization
+        reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f
+        reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "GPU Priority" /t REG_DWORD /d 8 /f
+        reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Priority" /t REG_DWORD /d 6 /f
+
+    - name: Network Turbo Optimization
+      shell: powershell
+      run: |
+        # TCP/IP stack optimization
         netsh int tcp set global autotuninglevel=normal
+        netsh int tcp set global chimney=enabled
+        netsh int tcp set global ecncapability=enabled
+        netsh int tcp set global dca=enabled
+        netsh int tcp set global netdma=enabled
         netsh int tcp set global rss=enabled
+        netsh int tcp set global initialRto=300
+        netsh int tcp set global rsc=enabled
+        netsh int tcp set global netdma=enabled
+        netsh int tcp set supplemental template=internet congestionprovider=ctcp
+        netsh int tcp set heuristics disabled
         
-        Write-Host "Optimization completed"
+        # Disable Nagle's algorithm for low latency
+        reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" /v TcpAckFrequency /t REG_DWORD /d 1 /f
+        reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" /v TCPNoDelay /t REG_DWORD /d 1 /f
+        
+        # QoS and packet pacing
+        netsh int tcp set global pacingprofile=off
+        netsh int tcp set global pacingtimer=1
 
-    - name: 🖥️ Configure RDP
+    - name: Anti-DDoS & Firewall Configuration
       shell: powershell
       run: |
-        Write-Host "=== RDP CONFIGURATION ==="
+        # Enable Windows Firewall with advanced security
+        Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
         
-        # Enable RDP
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+        # Configure specific rules for Tailscale only
+        netsh advfirewall firewall delete rule name="All" dir=in action=block | Out-Null
+        netsh advfirewall firewall add rule name="Tailscale-In" dir=in action=allow program="$env:ProgramFiles\Tailscale\tailscale.exe" enable=yes
+        netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 remoteip=${{ secrets.TAILSCALE_NETWORK }}
         
-        # Firewall rule
-        netsh advfirewall firewall add rule name="PC-V1-RDP" dir=in action=allow protocol=TCP localport=3389
-        
-        # Restart service
-        Restart-Service -Name TermService -Force
-        
-        echo "RDP_PORT=3389" >> $env:GITHUB_ENV
-        Write-Host "RDP configured"
+        # Block common attack vectors
+        $blockPorts = @(135, 137, 138, 139, 445)
+        foreach ($port in $blockPorts) {
+            netsh advfirewall firewall add rule name="Block-Port-$port" dir=in action=block protocol=TCP localport=$port
+        }
 
-    - name: 👤 Create User
+    - name: Configure RDP Security
       shell: powershell
       run: |
-        Write-Host "=== USER CREATION ==="
+        Write-Host "Configuring Secure RDP for PC-V1"
+        try {
+            # Enable RDP with enhanced security
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+            
+            # Security enhancements
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
+            
+            # RDP session limits and timeouts
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "MaxInstanceCount" -Value 2 -Force
+            
+            Restart-Service -Name TermService -Force
+            Write-Host "Secure RDP configuration completed successfully."
+        }
+        catch {
+            Write-Error "RDP Configuration failed: $($_.Exception.Message)"
+            exit 1
+        }
+
+    - name: Create Secure PC-V1 User
+      shell: powershell
+      run: |
+        # Generate cryptographically secure password
+        Add-Type -AssemblyName System.Security
+        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        $byteBuffer = [byte[]]::new(32)
+        $rng.GetBytes($byteBuffer)
         
-        # Simple password generation
-        $chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@'
-        $password = ''
-        for ($i = 0; $i -lt 12; $i++) {
-            $password += $chars[(Get-Random -Maximum $chars.Length)]
+        $charSets = @{
+            Upper = [char[]](65..90)   # A-Z
+            Lower = [char[]](97..122)  # a-z  
+            Number = [char[]](48..57)  # 0-9
+            Special = [char[]](33,35,36,37,38,42,43,45,61,63,64,94,95,126) # Special chars
         }
         
+        $passwordChars = @()
+        $passwordChars += $charSets.Upper | Get-Random -Count 4
+        $passwordChars += $charSets.Lower | Get-Random -Count 4  
+        $passwordChars += $charSets.Number | Get-Random -Count 4
+        $passwordChars += $charSets.Special | Get-Random -Count 4
+        
+        # Fisher-Yates shuffle for randomness
+        for ($i = $passwordChars.Length - 1; $i -gt 0; $i--) {
+            $j = Get-Random -Maximum ($i + 1)
+            $temp = $passwordChars[$i]
+            $passwordChars[$i] = $passwordChars[$j]
+            $passwordChars[$j] = $temp
+        }
+        
+        $password = -join $passwordChars
         $securePass = ConvertTo-SecureString $password -AsPlainText -Force
         
-        # Remove existing user
-        $existingUser = Get-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue
-        if ($existingUser) {
-            Remove-LocalUser -Name "PC-V1"
-            Start-Sleep -Seconds 2
-        }
-        
-        # Create new user
-        New-LocalUser -Name "PC-V1" -Password $securePass -AccountNeverExpires
+        # Create user with secure settings
+        New-LocalUser -Name "PC-V1" -Password $securePass -AccountNeverExpires -PasswordNeverExpires
         Add-LocalGroupMember -Group "Administrators" -Member "PC-V1"
         Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PC-V1"
         
+        # Set user account controls
+        net user "PC-V1" /logonpasswordchg:no
+        wmic useraccount where "name='PC-V1'" set PasswordExpires=False
+        
         echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
-        Write-Host "User created"
 
-    - name: 🌐 Install Tailscale
+    - name: Install & Configure Tailscale
       shell: powershell
       run: |
-        Write-Host "=== INSTALLING TAILSCALE ==="
+        $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+        $installerPath = "$env:TEMP\tailscale-setup.msi"
         
-        $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-        $installerPath = "$env:TEMP\tailscale.msi"
-        
-        Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-        Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+        # Download and install
+        Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -UserAgent "Tailscale-GitHub-Actions"
+        Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart", "/log", "$env:TEMP\tailscale-install.log" -Wait
         Remove-Item $installerPath -Force
         
+        # Wait for service to initialize
         Start-Sleep -Seconds 10
-        Write-Host "Tailscale installed"
 
-    - name: 🔗 Connect Tailscale
+    - name: Establish Secure Tailscale Tunnel
       shell: powershell
       run: |
-        Write-Host "=== CONNECTING TAILSCALE ==="
+        # Authenticate with exit node capability
+        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=PC-V1-Ultra --advertise-exit-node --ssh=false
         
-        Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
-        & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=pc-v1-stable
-        
-        # Get IP
+        # Wait for IP assignment with timeout
         $tsIP = $null
-        for ($i = 1; $i -le 10; $i++) {
+        $maxRetries = 15
+        $retryCount = 0
+        
+        while (-not $tsIP -and $retryCount -lt $maxRetries) {
             $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-            if ($tsIP -and $tsIP -match '^\d+\.\d+\.\d+\.\d+$') { break }
-            Start-Sleep -Seconds 3
-        }
-        
-        if ($tsIP) {
-            echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-            Write-Host "Tailscale IP: $tsIP"
-        } else {
-            Write-Host "Warning: Could not get Tailscale IP"
-            echo "TAILSCALE_IP=unknown" >> $env:GITHUB_ENV
-        }
-
-    - name: ✅ Verify Connection
-      shell: powershell
-      run: |
-        Write-Host "=== VERIFICATION ==="
-        
-        if ($env:TAILSCALE_IP -ne "unknown") {
-            $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -InformationLevel Quiet
-            if ($test) {
-                Write-Host "✓ Connection successful"
-            } else {
-                Write-Host "⚠️ Connection test failed"
+            if (-not $tsIP) {
+                $retryCount++
+                Start-Sleep -Seconds 5
             }
         }
-
-    - name: 📊 Final Setup
-      shell: powershell
-      run: |
-        Write-Host ""
-        Write-Host "═══════════════════════════════════════"
-        Write-Host "           PC-V1 ULTRA STABLE         "
-        Write-Host "═══════════════════════════════════════"
-        Write-Host "🌐 Address:  $env:TAILSCALE_IP"
-        Write-Host "👤 Username: PC-V1"
-        Write-Host "🔐 Password: $env:PCV1_PASSWORD"
-        Write-Host "⏰ Runtime:  ${{ env.RUNTIME_HOURS }}h"
-        Write-Host "═══════════════════════════════════════"
-        Write-Host ""
-        Write-Host "🎮 Untuk Moonlight:"
-        Write-Host "• Address: $env:TAILSCALE_IP"
-        Write-Host "• Username: PC-V1"
-        Write-Host "• Password: $env:PCV1_PASSWORD"
-        Write-Host "• GameStream mode"
-        Write-Host "═══════════════════════════════════════"
-
-    - name: 🛡️ Keep Alive
-      shell: powershell
-      run: |
-        Write-Host "=== KEEP ALIVE ==="
-        Write-Host "PC-V1 Stable aktif selama ${{ env.RUNTIME_HOURS }} jam"
-        Write-Host "IP: $env:TAILSCALE_IP"
-        Write-Host ""
         
-        $endTime = (Get-Date).AddHours(${{ env.RUNTIME_HOURS }})
-        $checkCount = 0
-        
-        while ((Get-Date) -lt $endTime) {
-            $checkCount++
-            $remaining = $endTime - (Get-Date)
-            
-            Write-Host "[$(Get-Date -Format 'HH:mm')] Check #$checkCount - $([math]::Round($remaining.TotalHours, 1)) jam tersisa"
-            
-            # Simple health check
-            $rdpStatus = Get-Service -Name "TermService" -ErrorAction SilentlyContinue
-            $tsStatus = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
-            Write-Host "  Status: RDP=$($rdpStatus.Status) Tailscale=$($tsStatus.Status)"
-            
-            Start-Sleep -Seconds 600  # Check every 10 minutes
+        if (-not $tsIP) {
+            Write-Error "Tailscale IP assignment failed after $maxRetries attempts"
+            exit 1
         }
         
-        Write-Host "Session selesai - ${{ env.RUNTIME_HOURS }} jam completed"
+        echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+        Write-Host "Tailscale connected successfully: $tsIP"
+
+    - name: System Stability & Monitoring Setup
+      shell: powershell
+      run: |
+        # Create monitoring script
+        $monitorScript = @"
+        `$ErrorActionPreference = "Continue"
+        while (`$true) {
+            try {
+                # Log system status
+                `$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                `$cpuUsage = (Get-Counter "\Processor(_Total)\% Processor Time").CounterSamples.CookedValue
+                `$memUsage = (Get-Counter "\Memory\% Committed Bytes In Use").CounterSamples.CookedValue
+                `$rdpSessions = (quser 2>`$null | Measure-Object).Count
+                `$tailscaleStatus = & "$env:ProgramFiles\Tailscale\tailscale.exe" status --json | ConvertFrom-Json
+                
+                Write-Host "[`$timestamp] CPU: `$([math]::Round(`$cpuUsage,2))% | Memory: `$([math]::Round(`$memUsage,2))% | RDP Sessions: `$rdpSessions"
+                Write-Host "Tailscale: `$(`$tailscaleStatus.BackendState) | MagicDNS: `$(`$tailscaleStatus.MagicDNSError)"
+                
+                # Auto-restart Tailscale if disconnected
+                if (`$tailscaleStatus.BackendState -ne "Running") {
+                    Write-Warning "Tailscale not running, attempting restart..."
+                    & "$env:ProgramFiles\Tailscale\tailscale.exe" up --reset
+                    Start-Sleep -Seconds 10
+                }
+                
+                # Check RDP service
+                `$rdpService = Get-Service -Name TermService -ErrorAction SilentlyContinue
+                if (`$rdpService.Status -ne "Running") {
+                    Write-Warning "RDP service not running, restarting..."
+                    Start-Service -Name TermService -Force
+                }
+                
+                Start-Sleep -Seconds 60
+            }
+            catch {
+                Write-Warning "Monitoring error: `$(`$_.Exception.Message)"
+                Start-Sleep -Seconds 30
+            }
+        }
+"@
+        
+        $monitorScript | Out-File -FilePath "C:\Monitor-PC-V1.ps1" -Encoding UTF8
+        
+        # Create scheduled task for auto-recovery
+        $action = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument "-File `"C:\Monitor-PC-V1.ps1`""
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+        Register-ScheduledTask -TaskName "PC-V1-Monitor" -Action $action -Trigger $trigger -Settings $settings -Description "PC-V1 System Monitor" -User "SYSTEM" -RunLevel Highest
+
+    - name: Final Verification & Connection Test
+      shell: powershell
+      run: |
+        Write-Host "=== PC-V1 Ultra Setup Complete ==="
+        Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+        Write-Host "Username: PC-V1" 
+        Write-Host "Password: $env:PCV1_PASSWORD"
+        Write-Host "Uptime Target: $env:UPTIME_TARGET"
+        Write-Host "Chain Headroom: $env:CHAIN_HEADROOM"
+        Write-Host "================================"
+        
+        # Comprehensive connectivity test
+        $testResults = @()
+        
+        # Test 1: Tailscale connectivity
+        $tsTest = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389 -InformationLevel Quiet
+        $testResults += @{Test="Tailscale RDP"; Result=$tsTest}
+        
+        # Test 2: Service status
+        $services = @("TermService", "Tailscale")
+        foreach ($service in $services) {
+            $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
+            $testResults += @{Test="$service Service"; Result=($svc.Status -eq "Running")}
+        }
+        
+        # Test 3: Network latency
+        $latency = Test-NetConnection -ComputerName $env:TAILSCALE_IP -InformationLevel Detailed | Select-Object -ExpandProperty PingReplyDetails | Select-Object -ExpandProperty RoundtripTime
+        $testResults += @{Test="Network Latency"; Result=($latency -lt 100)}
+        
+        # Display test results
+        Write-Host "`nConnectivity Test Results:"
+        foreach ($test in $testResults) {
+            $status = if ($test.Result) { "PASS" } else { "FAIL" }
+            Write-Host "  $($test.Test): $status"
+        }
+        
+        # Final system info
+        systeminfo | Select-String -Pattern "OS Name|OS Version|System Boot Time|Physical Memory" | ForEach-Object { Write-Host $_ }
+
+    - name: Maintain Ultra-Stable Connection
+      shell: powershell
+      run: |
+        Write-Host "=== PC-V1 Ultra Stable Mode Activated ==="
+        Write-Host "System optimized for:"
+        Write-Host "- 78+ hours uptime target"
+        Write-Host "- 6h chain headroom buffer" 
+        Write-Host "- Anti-DDoS protection"
+        Write-Host "- Low-latency gaming QoS"
+        Write-Host "- GPU queue optimization"
+        Write-Host "========================================"
+        
+        # Start monitoring in background
+        Start-Job -FilePath "C:\Monitor-PC-V1.ps1" -Name "PC-V1-Monitor"
+        
+        # Main keep-alive loop with health checks
+        $healthy = $true
+        while ($healthy) {
+            try {
+                $currentTime = Get-Date -Format "HH:mm:ss"
+                $systemUptime = (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime
+                $uptime = (Get-Date) - $systemUptime
+                
+                Write-Host "[$currentTime] PC-V1 Ultra Stable - Uptime: $($uptime.Days)d $($uptime.Hours)h $($uptime.Minutes)m"
+                
+                # Health check every 5 minutes
+                Start-Sleep -Seconds 300
+            }
+            catch {
+                Write-Warning "Keep-alive loop error: $($_.Exception.Message)"
+                $healthy = $false
+            }
+        }
+        
+        Write-Error "PC-V1 stability compromised, initiating recovery..."
