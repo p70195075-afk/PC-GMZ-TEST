@@ -27,18 +27,16 @@ jobs:
               exit 1
           }
 
-          # Power & System Optimization
+          # Power & Timer Optimization
           powercfg /change standby-timeout-ac 0
           powercfg /change monitor-timeout-ac 0
           powercfg /hibernate off
-
-          # High-Precision & Low-Latency Timer
           bcdedit /set useplatformclock true
           bcdedit /set tscsyncpolicy Enhanced
           bcdedit /set disabledynamictick yes
           reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel" /v GlobalTimerResolutionRequests /t REG_DWORD /d 1 /f
 
-          # Network Optimizations
+          # Network Stack Tuning
           netsh int tcp set global autotuninglevel=normal
           netsh int tcp set global chimney=enabled
           netsh int tcp set global ecncapability=enabled
@@ -49,92 +47,104 @@ jobs:
           netsh int tcp set global initialRto=300
           netsh int tcp set global rsc=enabled
 
-          # GPU & Graphics
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f  # Hardware-Accelerated GPU Scheduling
+          # GPU & DirectX
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f
           reg add "HKLM\SOFTWARE\Microsoft\DirectX" /v DisableHardwareProtectionFeatures /t REG_DWORD /d 0 /f
 
           Write-Host "System optimization applied successfully."
 
-      - name: Enable Ultimate Performance Power Plan
+      - name: Enable High Performance Power Plan (Ultimate Fallback)
         shell: powershell
         run: |
-          powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61
-          powercfg -setactive e9a42b02-d5df-448d-aa00-03f14749eb61
-          Write-Host "Ultimate Performance power plan activated."
+          $ultimateGuid = "e9a42b02-d5df-448d-aa00-03f14749eb61"
+          $highPerfGuid = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"
+          $list = powercfg -list | Out-String
 
-      - name: Install & Configure Steam + GTA V + FiveM
+          if ($list -match $ultimateGuid) {
+              powercfg -setactive $ultimateGuid
+              Write-Host "✅ Ultimate Performance activated."
+          } else {
+              if ($list -notmatch $highPerfGuid) {
+                  powercfg -restoredefaultschemes
+              }
+              powercfg -setactive $highPerfGuid
+              Write-Host "⚠️ Ultimate Performance not available. Using High Performance."
+          }
+
+      - name: Install DirectStorage Runtime (Official 1.3.0)
         shell: powershell
         run: |
-          # Install Steam silently
-          $steamUrl = "https://cdn.akamai.steamstatic.com/client/installer/SteamSetup.exe"
-          $steamPath = "$env:TEMP\SteamSetup.exe"
-          Invoke-WebRequest -Uri $steamUrl -OutFile $steamPath
-          Start-Process -FilePath $steamPath -ArgumentList "/S" -Wait
-          Remove-Item $steamPath -Force
+          Write-Host "Installing DirectStorage 1.3.0 runtime via winget..."
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+              try {
+                  & winget install --id Microsoft.Direct3D.DirectStorage --version 1.3.0 --exact --silent --accept-source-agreements --accept-package-agreements
+                  if ($LASTEXITCODE -eq 0) {
+                      Write-Host "✅ DirectStorage 1.3.0 installed successfully."
+                  } else {
+                      Write-Host "⚠️ DirectStorage install failed (exit code $LASTEXITCODE). Continuing..."
+                  }
+              } catch {
+                  Write-Host "⚠️ DirectStorage install exception: $_"
+              }
+          } else {
+              Write-Host "⚠️ winget not available. Skipping DirectStorage."
+          }
+          exit 0
 
-          # Enable Steam auto-login (optional, manual setup later)
-          New-Item -Path "HKCU:\Software\Valve\Steam" -Force | Out-Null
-          Set-ItemProperty -Path "HKCU:\Software\Valve\Steam" -Name "AutoLoginUser" -Value "steamuser" -Force
-          Set-ItemProperty -Path "HKCU:\Software\Valve\Steam" -Name "RememberPassword" -Value 1 -Force
-
-          # Enable Game Mode & Disable Game Bar
+      - name: Gaming Environment Setup (Steam, Game Mode, Virtual Memory)
+        shell: powershell
+        run: |
+          # Disable Game Bar & DVR
           reg add "HKCU:\Software\Microsoft\GameBar" /v AllowToRunOnDesktop /t REG_DWORD /d 0 /f
           reg add "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v AppCaptureEnabled /t REG_DWORD /d 0 /f
           reg add "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR" /v AllowGameDVR /t REG_DWORD /d 0 /f
-          reg add "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" /v GameDVR_Enabled /t REG_DWORD /d 0 /f
           reg add "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v GameDVR_DXGIHonorFSEWindows /t REG_DWORD /d 1 /f
 
-          # Install DirectStorage (for GPU decompression in future games)
-          if (Get-Command winget -ErrorAction SilentlyContinue) {
-            try {
-              & winget install --id Microsoft.DirectStorage -e --accept-source-agreements --accept-package-agreements --scope machine
-              Write-Host "DirectStorage installed."
-            } catch {
-              Write-Host "DirectStorage install skipped."
-            }
-          }
-
-          # Optimize Virtual Memory for Gaming
-          $pageFile = Get-WmiObject -Class Win32_PageFileSetting
-          if ($pageFile) {
-            $pageFile.Delete()
-          }
+          # Set large pagefile for game stability
           $sys = Get-WmiObject -Class Win32_ComputerSystem
           $sys.AutomaticManagedPagefile = $false
           $sys.Put()
-          $page = ([wmiclass]"Win32_PageFileSetting").CreateInstance()
-          $page.Name = "C:\pagefile.sys"
-          $page.InitialSize = 8192  # 8 GB
-          $page.MaximumSize = 16384 # 16 GB
-          $page.Put()
+          $page = Get-WmiObject -Class Win32_PageFileSetting
+          if ($page) { $page.Delete() }
+          $newPage = ([wmiclass]"Win32_PageFileSetting").CreateInstance()
+          $newPage.Name = "C:\pagefile.sys"
+          $newPage.InitialSize = 8192   # 8 GB
+          $newPage.MaximumSize = 16384  # 16 GB
+          $newPage.Put()
 
-          Write-Host "Steam, DirectStorage, and gaming environment configured."
+          # Install Steam silently (optional, for convenience)
+          $steamPath = "$env:TEMP\SteamSetup.exe"
+          if (-not (Test-Path "$env:ProgramFiles (x86)\Steam\Steam.exe")) {
+              Invoke-WebRequest "https://cdn.akamai.steamstatic.com/client/installer/SteamSetup.exe" -OutFile $steamPath
+              Start-Process -FilePath $steamPath -ArgumentList "/S" -Wait
+              Remove-Item $steamPath -ErrorAction SilentlyContinue
+          }
 
-      - name: GPU-Specific Gaming Optimizations (NVIDIA/AMD)
+          Write-Host "🎮 Gaming environment configured: Game Bar off, pagefile set, Steam ready."
+
+      - name: GPU & Game-Specific Optimizations
         shell: powershell
         run: |
-          # NVIDIA: Enable low-latency mode + performance preference
-          $nvidiaPath = "HKLM:\SOFTWARE\NVIDIA Corporation\Global\NVTweak"
-          if (Test-Path $nvidiaPath) {
-            New-ItemProperty -Path $nvidiaPath -Name "OptimusMaxRenderClock" -Value 1 -PropertyType DWord -Force
-            New-ItemProperty -Path $nvidiaPath -Name "PreferMaximumPerformance" -Value 1 -PropertyType DWord -Force
-            New-ItemProperty -Path $nvidiaPath -Name "LowLatencyMode" -Value 1 -PropertyType DWord -Force
+          # NVIDIA: Low Latency + Max Perf
+          $nvPath = "HKLM:\SOFTWARE\NVIDIA Corporation\Global\NVTweak"
+          if (Test-Path $nvPath) {
+              New-ItemProperty -Path $nvPath -Name "PreferMaximumPerformance" -Value 1 -PropertyType DWord -Force
+              New-ItemProperty -Path $nvPath -Name "LowLatencyMode" -Value 1 -PropertyType DWord -Force
           }
 
-          # AMD: Enable Radeon Anti-Lag & Boost (if detected)
-          $amdPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-          if (Test-Path "$amdPath\0000") {
-            Set-ItemProperty -Path "$amdPath\0000" -Name "PP_DynamicRefreshrate" -Value 1 -Force
-            Set-ItemProperty -Path "$amdPath\0000" -Name "AntiLagEnable" -Value 1 -Force
+          # AMD: Anti-Lag (if detected)
+          $amdBase = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+          if (Test-Path "$amdBase\0000") {
+              Set-ItemProperty -Path "$amdBase\0000" -Name "AntiLagEnable" -Value 1 -Force
           }
 
-          # Windows Game Config Store
+          # Windows Game Config
           $gcs = "HKCU:\Software\Microsoft\GameConfigStore"
           if (-not (Test-Path $gcs)) { New-Item -Path $gcs -Force | Out-Null }
           Set-ItemProperty -Path $gcs -Name "GameDVR_Enabled" -Value 0 -Force
           Set-ItemProperty -Path $gcs -Name "GameDVR_FSEBehavior" -Value 2 -Force
 
-          Write-Host "GPU-specific gaming optimizations applied."
+          Write-Host "GPU optimizations applied for NVIDIA/AMD."
 
       - name: Create PC-V1 User with Secure Password
         shell: powershell
@@ -198,19 +208,19 @@ jobs:
               Write-Error "TCP connection to port 3389 failed"
               exit 1
           }
-          Write-Host "PC-V1 Remote Desktop connectivity successful!"
+          Write-Host "✅ PC-V1 Remote Desktop connectivity successful!"
 
       - name: Maintain Connection
         shell: powershell
         run: |
-          Write-Host "==================="
-          Write-Host "🎮 PC-V1 Gaming Optimized for Steam / GTA V / FiveM"
-          Write-Host "🎯 Target: 90 FPS Stable"
+          Write-Host "==============================="
+          Write-Host "🎮 PC-V1 — Optimized for Steam / GTA V / FiveM"
+          Write-Host "🎯 Target: Stable 90 FPS"
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: PC-V1"
           Write-Host "Password: $env:PCV1_PASSWORD"
-          Write-Host "==================="
+          Write-Host "==============================="
           while ($true) {
-              Write-Host "[$(Get-Date)] PC-V1 Gaming Session Active - Use Ctrl+C or cancel workflow to terminate"
+              Write-Host "[$(Get-Date)] PC-V1 Gaming Session Active — Cancel workflow to stop"
               Start-Sleep -Seconds 300
           }
