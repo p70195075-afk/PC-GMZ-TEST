@@ -134,7 +134,7 @@ jobs:
 
       - name: Maintain Connection
         shell: powershell
-        continue-on-error: true  # Penting: agar tidak fail saat dibatalkan
+        continue-on-error: true
         run: |
           Write-Host "==============================="
           Write-Host "🎮 PC-V1 — Optimized for RTX 5090 (Next-Gen)"
@@ -148,7 +148,6 @@ jobs:
           # Simulate RTX 5090 registry hints (for future driver recognition)
           $rtx5090 = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0000"
           if (Test-Path $rtx5090) {
-              # Future-proof: Enable AV1 decode, DLSS, Reflex
               Set-ItemProperty -Path $rtx5090 -Name "EnableAV1Decode" -Value 1 -Force -ErrorAction SilentlyContinue
               Set-ItemProperty -Path $rtx5090 -Name "DlssEnabled" -Value 1 -Force -ErrorAction SilentlyContinue
               Set-ItemProperty -Path $rtx5090 -Name "ReflexLowLatency" -Value 1 -Force -ErrorAction SilentlyContinue
@@ -160,8 +159,13 @@ jobs:
                   Write-Host "[$(Get-Date)] PC-V1 Active — RTX 5090 Ready"
                   Start-Sleep -Seconds 300
               }
-          } finally {
-              # Clean exit on cancel (avoids "code 1" in logs)
-              Write-Host "🛑 PC-V1 session terminated gracefully."
-              exit 0
           }
+          catch {
+              Write-Host "⚠️ Exception: $($_.Exception.Message)"
+          }
+          finally {
+              Write-Host "🛑 PC-V1 session terminated gracefully."
+          }
+
+          exit 0
+
