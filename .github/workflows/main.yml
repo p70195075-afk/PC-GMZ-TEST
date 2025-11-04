@@ -272,14 +272,18 @@ jobs:
       - name: Maintain Connection
         shell: powershell
         run: |
+          $startTime = Get-Date
           Write-Host "==============================="
           Write-Host "PC-V1 Info:"
           Write-Host "Address: $env:TS_IP"
           Write-Host "Username: $env:RDP_USER"
           Write-Host "Password: $env:RDP_PASS"
           Write-Host "Port: $env:RDP_PORT"
+          Write-Host "Started at: $startTime"
           Write-Host "==============================="
+
           while ($true) {
-              Write-Host "[$(Get-Date)] PC-V1 Session still running..."
+              $elapsed = (New-TimeSpan -Start $startTime -End (Get-Date)).ToString("hh\:mm\:ss")
+              Write-Host "[$(Get-Date)] PC-V1 Session running for: $elapsed"
               Start-Sleep -Seconds 300
           }
