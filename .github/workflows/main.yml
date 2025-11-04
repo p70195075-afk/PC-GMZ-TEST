@@ -67,34 +67,6 @@ jobs:
               Write-Host "⚠️ Using High Performance (Ultimate not available)."
           }
 
-      - name: Install DirectStorage 1.3.0 (Official)
-        shell: powershell
-        run: |
-          if (Get-Command winget -ErrorAction SilentlyContinue) {
-              & winget install --id Microsoft.Direct3D.DirectStorage --version 1.3.0 --exact --silent --accept-source-agreements --accept-package-agreements
-          }
-          Write-Host "ℹ️ DirectStorage install attempted (non-critical)."
-          exit 0
-
-      - name: Gaming Environment Setup (Safe for GitHub Actions)
-        shell: powershell
-        run: |
-          # Disable Game Bar & DVR
-          reg add "HKCU:\Software\Microsoft\GameBar" /v AllowToRunOnDesktop /t REG_DWORD /d 0 /f
-          reg add "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v AppCaptureEnabled /t REG_DWORD /d 0 /f
-          reg add "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR" /v AllowGameDVR /t REG_DWORD /d 0 /f
-          reg add "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v GameDVR_DXGIHonorFSEWindows /t REG_DWORD /d 1 /f
-
-          # Install Steam (non-blocking)
-          if (-not (Test-Path "$env:ProgramFiles (x86)\Steam\Steam.exe")) {
-              $steam = "$env:TEMP\SteamSetup.exe"
-              Invoke-WebRequest "https://cdn.akamai.steamstatic.com/client/installer/SteamSetup.exe" -OutFile $steam
-              Start-Process -FilePath $steam -ArgumentList "/S" -Wait
-              Remove-Item $steam -ErrorAction SilentlyContinue
-          }
-
-          Write-Host "🎮 Gaming environment ready (Steam installed, Game Bar off)."
-
       - name: GPU & Game Optimizations (NVIDIA/AMD Safe)
         shell: powershell
         run: |
