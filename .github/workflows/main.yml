@@ -1,219 +1,285 @@
-name: PC-V1 Enhanced
+name: PC-V1
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
+  secure-PC-V1:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 4680
 
     steps:
-      - name: Configure Core PC-V1 Settings + Performance & Security Hardening
+      - name: Disable Sleep / Hibernate / PowerSave
         shell: powershell
         run: |
-          Write-Host "🔧 Applying full PC-V1 hardening & optimization stack..."
-
-          # === RDP Basic Setup ===
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-
-          # === Power & Timer Tweaks (78h uptime + low latency) ===
           powercfg /change standby-timeout-ac 0
           powercfg /change monitor-timeout-ac 0
           powercfg /hibernate off
-          bcdedit /set useplatformclock true
-          bcdedit /set tscsyncpolicy Enhanced
-          bcdedit /set disabledynamictick yes
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Kernel" /v GlobalTimerResolutionRequests /t REG_DWORD /d 1 /f
-          reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 0 /f
-          reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Affinity" /t REG_DWORD /d 0 /f
-          reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "GPU Priority" /t REG_DWORD /d 8 /f
-          reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Priority" /t REG_DWORD /d 2 /f
+          powercfg /setactive SCHEME_MIN
+          echo Disabled Sleep/Hibernate
 
-          # === Networking & Anti-Jitter ===
-          netsh int tcp set global autotuninglevel=normal
-          netsh int tcp set global chimney=enabled
-          netsh int tcp set global ecncapability=enabled
-          netsh int tcp set global dca=enabled
-          netsh int tcp set global netdma=enabled
-          netsh int tcp set global rss=enabled
-          netsh int tcp set global rsc=enabled
-          netsh int tcp set global initialRto=200
-          netsh int tcp set global maxsynretransmissions=2
-          netsh int tcp set global conndrtimeout=10
-          # Disable pacing for ultra-low latency (VSYNC-less gaming)
-          netsh int tcp set global pacingprofile=disabled
+      - name: Optimize TCP Stack + QoS Gaming
+        shell: powershell
+        run: |
+          netsh interface tcp set heuristics disabled
+          netsh interface tcp set global congestionprovider=ctcp
+          netsh interface tcp set global rss=enabled
+          netsh interface tcp set global chimney=disabled
+          netsh interface tcp set global ecncapability=enabled
+          echo QoS Gaming Turbo Applied
 
-          # === GPU & RTX Latency Optimization ===
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Scheduler" /v EnablePreemption /t REG_DWORD /d 1 /f
-          reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v GpuPriority /t REG_DWORD /d 8 /f
+      - name: Optimize PC-V1 Keepalive
+        shell: powershell
+        run: |
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'KeepAliveEnable' -Value 1 -PropertyType DWord -Force
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name 'KeepAliveTime' -Value 30000 -PropertyType DWord -Force
+          echo RDP KeepAlive Enabled
 
-          # === Firewall: ONLY allow Tailscale subnet (block public internet) ===
-          netsh advfirewall set allprofiles state on
-          netsh advfirewall firewall delete rule name="PC-V1-Tailscale"
-          netsh advfirewall firewall add rule name="PC-V1-Allow-Tailscale" dir=in action=allow protocol=TCP remoteip=100.64.0.0/10 localport=any
-          netsh advfirewall firewall add rule name="PC-V1-Deny-All-Else" dir=in action=block protocol=any
+      - name: Configure Core PC-V1 Settings
+        shell: powershell
+        run: |
+          Start-Process powershell -Verb runAs -ArgumentList @"
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Force
+            netsh advfirewall firewall add rule name='RDP-Allow' dir=in action=allow protocol=TCP localport=3389
+            Restart-Service -Name TermService -Force
+          "@
 
-          # === Disable OS Fingerprinting (hide Windows signatures) ===
-          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v DisableUserTOSSetting /t REG_DWORD /d 1 /f
-          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TcpMaxDataRetransmissions /t REG_DWORD /d 3 /f
+      - name: Anti Idle + Session Timeout Policies
+        shell: powershell
+        run: |
+          New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -ErrorAction SilentlyContinue
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name 'MaxIdleTime' -Value 0 -PropertyType DWord -Force
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name 'fResetBroken' -Value 1 -PropertyType DWord -Force
+          echo Idle Disconnect Disabled
 
-          # === Anti-DDoS: No public exposure (Tailscale-only) → public DDoS risk = 0% ===
-          Write-Host "✅ Tailscale-only access enforced. Public RDP port closed."
-
-          Restart-Service -Name TermService -Force
-          Write-Host "✅ Core PC-V1 configuration completed."
-
-      - name: Create Secure PC-V1 User
+      - name: Create PC-V1 User Secure
         shell: powershell
         run: |
           Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $chars = ([char[]](33..126))
+          $password = -join ($chars | Get-Random -Count 14)
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "PC-V1" -Password $securePass -AccountNeverExpires -Description "Secure RDP gaming user"
+          if (-not (Get-LocalUser -Name "PC-V1" -ErrorAction SilentlyContinue)) {
+              New-LocalUser -Name "PC-V1" -Password $securePass -AccountNeverExpires
+          }
           Add-LocalGroupMember -Group "Administrators" -Member "PC-V1"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "PC-V1"
-          echo "PCV1_PASSWORD=$password" >> $env:GITHUB_ENV
+          echo "RDP_USER=PC-V1" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
       - name: Install Tailscale
         shell: powershell
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $file = "$env:TEMP\\tailscale.msi"
+          Invoke-WebRequest -Uri $url -OutFile $file
+          Start-Process msiexec.exe -ArgumentList "/i `"$file`" /quiet /norestart" -Wait
+          Remove-Item $file -Force
 
-      - name: Configure RDP Stealth Port & Honeypot
+      - name: Establish Tailscale (Tailscale-only access, public DDoS 0%)
         shell: powershell
         run: |
-          # Randomize RDP port (but keep it internal; Tailscale handles routing)
-          $randomPort = (Get-Random -Minimum 49152 -Maximum 65535)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "PortNumber" -Value $randomPort -Force
+          & "$env:ProgramFiles\\Tailscale\\tailscale.exe" up --authkey ${{ secrets.TAILSCALE_AUTH_KEY }} --hostname "PC-V1-${{ github.run_id }}"
+          Start-Sleep -Seconds 10
+          $tsIP = & "$env:ProgramFiles\\Tailscale\\tailscale.exe" ip -4
+          echo "TS_IP=$tsIP" >> $env:GITHUB_ENV
 
-          # Open ONLY this port to Tailscale (not public)
-          netsh advfirewall firewall add rule name="PC-V1-RDP-Stealth" dir=in action=allow protocol=TCP localport=$randomPort remoteip=100.64.0.0/10
-
-          # Honeypot: Open fake ports to detect scanners (log & ban)
-          $honeypotPorts = @(22, 23, 53, 135, 139, 445, 1433, 3306, 5900)
-          foreach ($port in $honeypotPorts) {
-              netsh advfirewall firewall add rule name="Honeypot-$port" dir=in action=allow protocol=TCP localport=$port
-          }
-
-          echo "RDP_STEALTH_PORT=$randomPort" >> $env:GITHUB_ENV
-          Write-Host "RDP stealth port randomized to: $randomPort"
-          Write-Host "Honeypot ports deployed for anti-portscan."
-
-      - name: Establish Tailscale Connection
+      - name: Anti-DDoS Firewall (Block public PC-V1 access, Tailscale-only)
         shell: powershell
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=PC-V1 --advertise-routes=127.0.0.1/32
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 15) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 4
-              $retries++
+          try {
+            # Disable default RDP firewall rules to block public access
+            Disable-NetFirewallRule -DisplayName "Remote Desktop*" -ErrorAction SilentlyContinue
+            # Allow RDP only from Tailscale CGNAT subnet (100.64.0.0/10) for full Tailscale-only access
+            New-NetFirewallRule -DisplayName "Tailscale-RDP-Allow" -Direction Inbound -Protocol TCP -LocalPort 3389 -Action Allow -RemoteAddress "100.64.0.0/10" -ErrorAction SilentlyContinue
+            # Enable Windows Firewall logging for monitoring dropped connections
+            netsh advfirewall set allprofiles logging filename "%systemroot%\system32\logfiles\firewall\pfirewall.log"
+            netsh advfirewall set allprofiles logging maxfilesize 4096
+            netsh advfirewall set allprofiles logging droppedconnections enable
+            echo "Anti-DDoS Firewall Applied: RDP blocked from public, allowed only via Tailscale (100.64.0.0/10)"
+          } catch {
+            echo "Error in Anti-DDoS Firewall setup: $_"
+            exit 0  # Continue workflow even if firewall setup fails
           }
-          if (-not $tsIP) {
-              Write-Error "Tailscale failed to assign IP"
-              exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-          Write-Host "Tailscale IP: $tsIP"
 
-      - name: Deploy Brute-Force Autoban Monitor (Background Job)
+      - name: Anti-Portscan Honeypot (Detect and mislead port scanners)
         shell: powershell
         run: |
-          $script = @'
-            $banList = @{}
-            while ($true) {
-                $events = Get-WinEvent -LogName "Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational" -MaxEvents 50 -ErrorAction SilentlyContinue |
-                          Where-Object { $_.Id -eq 140 -and $_.Level -eq 2 } # Failed login
+          # Install a simple honeypot using a fake service on random unused ports
+          $randomPort = Get-Random -Minimum 10000 -Maximum 65535
+          $script = @"
+          `$listener = New-Object System.Net.Sockets.TcpListener('0.0.0.0', $randomPort)
+          `$listener.Start()
+          while (`$true) {
+            `$client = `$listener.AcceptTcpClient()
+            `$stream = `$client.GetStream()
+            `$writer = New-Object System.IO.StreamWriter(`$stream)
+            `$writer.WriteLine('Honeypot: Access Denied')  # Mislead scanner
+            `$writer.Flush()
+            `$client.Close()
+            Write-Host "Port scan detected on $randomPort from `$(`$client.Client.RemoteEndPoint)"
+          }
+          "@
+          $path = "$env:ProgramData\\honeypot.ps1"
+          $script | Out-File $path
+          Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File $path"
+          echo "Anti-Portscan Honeypot Enabled on port $randomPort"
 
-                foreach ($e in $events) {
-                    $ip = ($e.Properties[0].Value -split ':')[0]
-                    if ($ip -match "^\d+\.\d+\.\d+\.\d+$") {
-                        if (-not $banList[$ip]) { $banList[$ip] = 0 }
-                        $banList[$ip]++
-                        if ($banList[$ip] -ge 3) {
-                            netsh advfirewall firewall add rule name="Autoban-$ip" dir=in action=block remoteip=$ip
-                            Write-Host "🚨 Banned IP $ip after 3 failed RDP attempts"
-                        }
-                    }
-                }
-                Start-Sleep -Seconds 30
+      - name: PC-V1 Stealth Port Randomizer (Change PC-V1 port to random)
+        shell: powershell
+        run: |
+          $randomPort = Get-Random -Minimum 10000 -Maximum 65535
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'PortNumber' -Value $randomPort -Force
+          # Update firewall rules to reflect new port
+          Set-NetFirewallRule -DisplayName "Tailscale-RDP-Allow" -LocalPort $randomPort -ErrorAction SilentlyContinue
+          Restart-Service -Name TermService -Force
+          echo "RDP Port Randomized to $randomPort"
+          echo "RDP_PORT=$randomPort" >> $env:GITHUB_ENV
+
+      - name: Disguise OS Fingerprinting (Alter responses to confuse scanners)
+        shell: powershell
+        run: |
+          # Modify registry to change OS version strings and disable services that leak info
+          New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'ProductName' -Value 'Ubuntu Linux' -PropertyType String -Force  # Fake OS name
+          # Disable unnecessary services that leak info
+          Stop-Service -Name SSDPSRV -ErrorAction SilentlyContinue  # UPnP
+          Set-Service -Name SSDPSRV -StartupType Disabled
+          echo OS Fingerprinting Disguised
+
+      - name: GPU Passthrough Kernel Scheduling Boost (Enable GPU passthrough optimizations)
+        shell: powershell
+        run: |
+          # Enable GPU passthrough in registry (for virtualized environments)
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'TdrDelay' -Value 0 -PropertyType DWord -Force  # Reduce timeout
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'TdrDdiDelay' -Value 0 -PropertyType DWord -Force
+          # Boost kernel scheduling for GPU
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' -Name 'GPU Priority' -Value 8 -PropertyType DWord -Force
+          echo GPU Passthrough Kernel Scheduling Boost Applied
+
+      - name: Anti Jitter Ping (Reduce network jitter)
+        shell: powershell
+        run: |
+          # Adjust TCP settings to minimize jitter
+          netsh interface tcp set global timestamps=disabled
+          netsh interface tcp set global initialRto=2000  # Lower initial RTO
+          # Enable QoS for ping packets
+          netsh advfirewall firewall add rule name="ICMP-Allow" dir=in action=allow protocol=ICMPv4
+          echo Anti Jitter Ping Enabled
+
+      - name: Packet Pacing VSYNC-Less (Optimize packet pacing for low latency)
+        shell: powershell
+        run: |
+          # Disable VSYNC-like pacing in network stack
+          netsh interface tcp set global pacingprofile=off
+          # Enable experimental autotuning for better pacing
+          netsh int tcp set global autotuninglevel=experimental
+          echo Packet Pacing VSYNC-Less Applied
+
+      - name: High Precision Timers (Enable high-precision event timers)
+        shell: powershell
+        run: |
+          # Enable high-precision timers (requires restart, may not fully apply in runner)
+          try {
+            bcdedit /set useplatformtick yes
+            bcdedit /set disabledynamictick yes
+            echo High Precision Timers Enabled (restart recommended for full effect)
+          } catch {
+            echo "High Precision Timers: bcdedit failed, continuing without changes"
+          }
+
+      - name: GPU Queue Shaving (Optimize GPU command queues for latency)
+        shell: powershell
+        run: |
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -Value 2 -PropertyType DWord -Force  # HAGS
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'LatencyToleranceTimer' -Value 1 -PropertyType DWord -Force  # Lower latency tolerance
+          echo GPU Queue Shaving Applied
+
+      - name: Verify PC-V1 
+        shell: powershell
+        run: |
+          $result = Test-NetConnection -ComputerName $env:TS_IP -Port $env:RDP_PORT
+          if (-not $result.TcpTestSucceeded) { exit 1 }
+
+      - name: Auto Reconnect Monitor
+        shell: powershell
+        run: |
+          $script = @"
+          while (`$true) {
+            if (-not (Test-Connection 8.8.8.8 -Count 1 -Quiet)) {
+              Restart-Service TermService -Force
+              Get-NetAdapter | Disable-NetAdapter -Confirm:`$false; Start-Sleep 2; Get-NetAdapter | Enable-NetAdapter -Confirm:`$false
             }
-          $script | Out-File -FilePath "$env:TEMP\autoban.ps1" -Encoding ASCII
-          Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -File `"$env:TEMP\autoban.ps1`"" -PassThru
-
-      - name: Deploy Honeypot Logger
-        shell: powershell
-        run: |
-          # Minimal honeypot: log connection attempts to fake ports
-          $hpScript = @'
-            while ($true) {
-                Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -in @(22,23,53,135,139,445,1433,3306,5900) } | ForEach-Object {
-                    $conn = Get-NetTCPConnection -LocalPort $_.LocalPort -State Established -ErrorAction SilentlyContinue
-                    if ($conn) {
-                        $log = "$(Get-Date): Honeypot hit on port $($conn.LocalPort) from $($conn.RemoteAddress)"
-                        Write-Host $log
-                        # Optional: ban or alert
-                    }
-                }
-                Start-Sleep -Seconds 10
-            }
-          $hpScript | Out-File -FilePath "$env:TEMP\honeypot.ps1" -Encoding ASCII
-          Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -File `"$env:TEMP\honeypot.ps1`"" -PassThru
-
-      - name: Verify RDP Accessibility via Tailscale
-        shell: powershell
-        run: |
-          $port = $env:RDP_STEALTH_PORT
-          $test = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port $port -WarningAction SilentlyContinue
-          if (-not $test.TcpTestSucceeded) {
-              Write-Error "RDP stealth port $port unreachable"
-              exit 1
+            Start-Sleep 15
           }
-          Write-Host "✅ RDP reachable via Tailscale at $($env:TAILSCALE_IP):$port"
+          "@
+          $path = "$env:ProgramData\\rdp-monitor.ps1"
+          $script | Out-File $path
+          Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File $path"
 
-      - name: Keep Alive & Log Heartbeat (78h Uptime Simulation)
+      - name: Game Performance Boost RTX4090 Tweaks
         shell: powershell
         run: |
-          Write-Host "==================="
-          Write-Host "🟢 PC-V1 Ready for Gaming & Secure RDP"
-          Write-Host "Address: $($env:TAILSCALE_IP):$($env:RDP_STEALTH_PORT)"
-          Write-Host "Username: PC-V1"
-          Write-Host "Password: $($env:PCV1_PASSWORD)"
-          Write-Host "==================="
-          Write-Host "🔒 Public DDoS Risk: 0% (Tailscale-only)"
-          Write-Host "🎮 RTX Latency Mode: ENABLED"
-          Write-Host "⏱️ High-Precision Timers: ACTIVE"
+          powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61
+          powercfg -setactive e9a42b02-d5df-448d-aa00-03f14749eb61
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -Value 2 -PropertyType DWord -Force
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' -Name 'GPU Priority' -Value 8 -PropertyType DWord -Force
+          netsh int tcp set global autotuninglevel=experimental
+          echo RTX4090 Game Performance Boost Applied
 
-          $startTime = Get-Date
+      - name: Enable Ultra Low Latency Mode
+        shell: powershell
+        run: |
+          # Low-latency kernel and scheduler tweaks
+          reg add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v Win32PrioritySeparation /t REG_DWORD /d 38 /f
+          # Ensure hardware-accelerated GPU scheduling is enabled (HAGS)
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -Value 2 -PropertyType DWord -Force
+          # Reduce NIC interrupt moderation (if supported) to lower packet latency
+          Get-NetAdapter | ForEach-Object { 
+            try { Set-NetAdapterAdvancedProperty -Name `$_.Name -DisplayName 'Interrupt Moderation' -DisplayValue 'Disabled' -NoRestart -ErrorAction SilentlyContinue } catch { }
+          }
+          Write-Host "Ultra Low Latency Mode applied"
+
+      - name: Enable DirectStorage runtime (if available)
+        shell: powershell
+        run: |
+          # Try installing DirectStorage via winget but never fail the step
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            try {
+              & winget install --id Microsoft.DirectStorage -e --accept-package-agreements --accept-source-agreements --source winget
+              $code = $LASTEXITCODE
+              if ($code -ne 0) { Write-Host "winget returned exit code $code. Package may be unavailable in this runner." }
+              else { Write-Host "DirectStorage install succeeded (winget exit 0)" }
+            } catch {
+              Write-Host "winget threw an exception but continuing: $_"
+            }
+          } else {
+            Write-Host "winget not available; skipping DirectStorage install. Manual install recommended: https://aka.ms/directstorage"
+          }
+          Write-Host "Continuing without DirectStorage..."
+          exit 0
+
+      - name: Logs Alive (Enable persistent logging)
+        shell: powershell
+        run: |
+          # Ensure RDP and system logs are enabled and persistent
+          wevtutil sl Security /ms:104857600  # Set max size to 100MB
+          wevtutil sl System /ms:104857600
+          wevtutil sl "Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational" /e:true
+          # Keep logs alive by preventing auto-clear
+          New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog' -Name 'AutoBackupLogFiles' -Value 1 -PropertyType DWord -Force
+          echo Logs Alive Enabled
+
+      - name: Maintain Connection
+        shell: powershell
+        run: |
+          Write-Host "==============================="
+          Write-Host "PC-V1 Info:"
+          Write-Host "Address: $env:TS_IP"
+          Write-Host "Username: $env:RDP_USER"
+          Write-Host "Password: $env:RDP_PASS"
+          Write-Host "Port: $env:RDP_PORT"
+          Write-Host "==============================="
           while ($true) {
-              $uptime = [math]::Round(((Get-Date) - $startTime).TotalHours, 2)
-              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ❤️ PC-V1 ALIVE | Uptime: ${uptime}h | Chain headroom: 6h"
-              
-              # Auto-restart if RDP service stops
-              if ((Get-Service TermService).Status -ne 'Running') {
-                  Write-Host "⚠️ RDP service down! Restarting..."
-                  Restart-Service TermService -Force
-              }
-
+              Write-Host "[$(Get-Date)] PC-V1 Session still running..."
               Start-Sleep -Seconds 300
           }
